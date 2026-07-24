@@ -204,7 +204,18 @@ final class TerminalSurfaceCoordinator {
 
         lastMetrics = metrics
         TerminalDebugLog.log(.metrics, "sync updated \(metrics.debugSummary)")
-        configuration.inMemorySession?.updateViewport(surfaceSize)
+        // vimeflow parity fix: do NOT dispatch a host resize here. This runs on
+        // the AppKit thread right after setSize(), i.e. BEFORE ghostty's IO
+        // thread commits the grid reflow — a premature winsize. It reached the
+        // host PTY ahead of the reflow and then made the correctly-phased
+        // IO-thread `receiveResizeCallback` (from HostManaged.resize inside the
+        // real Termio.resize) look "unchanged" and get deduped, so a
+        // relative-cursor TUI (e.g. Claude Code) repainted against a winsize
+        // that led the grid and its clamped CUD merged the footer. Removing
+        // this dispatch makes receiveResizeCallback the sole PTY-resize source,
+        // exactly like stock Ghostty (pty.setSize only inside Termio.resize,
+        // atomic with the grid). Local UI metrics still flow via the delegate
+        // below and onMetricsUpdate.
         if let delegate = delegate as? any TerminalSurfaceGridResizeDelegate {
             delegate.terminalDidResize(surfaceSize)
         } else if let delegate = delegate as? any TerminalSurfaceResizeDelegate {
