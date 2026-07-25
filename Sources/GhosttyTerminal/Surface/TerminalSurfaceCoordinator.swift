@@ -96,6 +96,26 @@ final class TerminalSurfaceCoordinator {
     // MARK: - Surface Lifecycle
 
     func rebuildIfReady(removingBridgeFrom previousController: TerminalController? = nil) {
+        // A pane that is merely hidden reports a zero size. Tearing the surface
+        // down here and then bailing out at the size guard below would destroy
+        // ghostty's grid and scrollback for a condition that is temporary: when
+        // the pane comes back there is nothing left to show, and only the app
+        // redrawing can refill it. Keep the surface — the caller re-runs this
+        // once the view has a usable size again.
+        //
+        // This is the same intent as the reattach guard in viewDidMoveToWindow
+        // ("rebuilding on every reattach discards Ghostty's scrollback/state"),
+        // which cannot help while the teardown happens before the checks.
+        if surface != nil, previousController == nil, !hasValidViewSize {
+            let size = viewSize()
+            TerminalDebugLog.log(
+                .lifecycle,
+                "surface kept: view size temporarily invalid \(String(format: "%.2f", size.width))x\(String(format: "%.2f", size.height))"
+            )
+
+            return
+        }
+
         tearDownSurface(removingBridgeFrom: previousController ?? controller)
         guard let controller else {
             TerminalDebugLog.log(.lifecycle, "surface rebuild skipped: missing controller")
