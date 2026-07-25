@@ -69,6 +69,7 @@ final class TerminalSurfaceCoordinator {
     private var pendingImmediateTick = true
     private var lastTickTimestamp: TimeInterval = 0
     private var tickScheduled = false
+    private var frameHoldRecheckScheduled = false
 
     init() {
         bridge.onCellSizeChange = { [weak self] width, height in
@@ -204,7 +205,18 @@ final class TerminalSurfaceCoordinator {
 
         lastMetrics = metrics
         TerminalDebugLog.log(.metrics, "sync updated \(metrics.debugSummary)")
-        configuration.inMemorySession?.updateViewport(surfaceSize)
+        // vimeflow parity fix: do NOT dispatch a host resize here. This runs on
+        // the AppKit thread right after setSize(), i.e. BEFORE ghostty's IO
+        // thread commits the grid reflow — a premature winsize. It reached the
+        // host PTY ahead of the reflow and then made the correctly-phased
+        // IO-thread `receiveResizeCallback` (from HostManaged.resize inside the
+        // real Termio.resize) look "unchanged" and get deduped, so a
+        // relative-cursor TUI (e.g. Claude Code) repainted against a winsize
+        // that led the grid and its clamped CUD merged the footer. Removing
+        // this dispatch makes receiveResizeCallback the sole PTY-resize source,
+        // exactly like stock Ghostty (pty.setSize only inside Termio.resize,
+        // atomic with the grid). Local UI metrics still flow via the delegate
+        // below and onMetricsUpdate.
         if let delegate = delegate as? any TerminalSurfaceGridResizeDelegate {
             delegate.terminalDidResize(surfaceSize)
         } else if let delegate = delegate as? any TerminalSurfaceResizeDelegate {
@@ -270,6 +282,20 @@ final class TerminalSurfaceCoordinator {
         guard shouldRenderFrame(at: context.timestamp) else {
             return
         }
+
+        // A resize reflowed the grid but the app's redraw is still in flight:
+        // keep presenting the last good frame instead of one whose content is
+        // laid out for the previous size. `pendingImmediateTick` is deliberately
+        // NOT consumed here so the frame is drawn as soon as the hold clears;
+        // rendering is wakeup-driven, so also poll in case the app stays silent.
+        // Skipped before the first paint — there is no good frame to hold yet.
+        if lastTickTimestamp != 0,
+           configuration.inMemorySession?.shouldHoldFrame == true {
+            TerminalDebugLog.log(.render, "tick held: resize redraw in flight")
+            scheduleFrameHoldRecheck()
+            return
+        }
+
         pendingImmediateTick = false
         lastTickTimestamp = context.timestamp
         TerminalDebugLog.log(.render, "tick")
@@ -346,6 +372,25 @@ final class TerminalSurfaceCoordinator {
             return false
         }
         return pendingImmediateTick || lastTickTimestamp == 0
+    }
+
+    /// Re-arm a tick while a frame hold is active.
+    ///
+    /// Rendering here is wakeup-driven (no free-running display link), so a held
+    /// tick would otherwise be the last one until some unrelated event arrives.
+    /// The app's redraw normally wakes us on its own; this only covers the case
+    /// where nothing comes back, so the hold's timeout can actually take effect.
+    private func scheduleFrameHoldRecheck() {
+        guard !frameHoldRecheckScheduled else {
+            return
+        }
+
+        frameHoldRecheckScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self else { return }
+            frameHoldRecheckScheduled = false
+            requestImmediateTick()
+        }
     }
 
     private func scheduleTickIfNeeded() {
