@@ -19,6 +19,19 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
     /// last good frame instead of the freshly-reflowed one. See `shouldHoldFrame`.
     private var frameHoldDeadline: Date?
 
+    /// When the last grid change was dispatched to the host — the reference
+    /// point for telling in-flight output apart from the answering repaint.
+    private var lastDispatchAt: Date?
+
+    /// Output arriving this soon after a dispatch was already in flight
+    /// BEFORE the agent could have seen the new winsize: a frame laid out for
+    /// the previous width. An agent that animates (a pulsing banner, a
+    /// spinner) emits such chunks constantly, and each one used to release
+    /// the hold and present the stale reflow. Measured: in-flight chunks
+    /// land within ~3ms of the dispatch; the fastest signal-to-repaint is
+    /// ~8ms (median 15ms), so 5ms separates the two populations.
+    private static let inFlightGuard: TimeInterval = 0.005
+
     /// Upper bound on a frame hold. A host-managed app that never answers the
     /// resize must not be able to freeze the surface indefinitely.
     /// Tunable for experiments: VIMEFLOW_GHOSTTY_HOLD_MS overrides the timeout,
@@ -190,8 +203,21 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
 
         // Release only once the fresh bytes are in the grid, so the next draw
         // the coordinator runs presents the app's frame — never the stale
-        // reflow the hold existed to cover.
+        // reflow the hold existed to cover. Bytes inside the in-flight window
+        // are written (ordering is not negotiable) but do not release: they
+        // predate the winsize, so presenting them IS the stale frame.
+        if Self.isWithinInFlightWindow(dispatchedAt: lastDispatchAt, now: Date()) {
+            return
+        }
         frameHoldDeadline = nil
+    }
+
+    /// Whether `now` is still inside the in-flight window after a dispatch —
+    /// see `inFlightGuard`. Static and pure so the boundary is testable
+    /// without a live ghostty surface.
+    static func isWithinInFlightWindow(dispatchedAt: Date?, now: Date) -> Bool {
+        guard let dispatchedAt else { return false }
+        return now.timeIntervalSince(dispatchedAt) < inFlightGuard
     }
 
     /// Feed a UTF-8 string into the terminal from the host backend.
@@ -311,6 +337,7 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         if Self.frameHoldTimeout > 0 {
             frameHoldDeadline = Date().addingTimeInterval(Self.frameHoldTimeout)
         }
+        lastDispatchAt = Date()
         lock.unlock()
 
         TerminalDebugLog.log(

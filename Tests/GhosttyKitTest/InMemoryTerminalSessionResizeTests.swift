@@ -122,6 +122,30 @@ struct InMemoryTerminalSessionResizeTests {
         #expect(session.shouldHoldFrame == true)
     }
 
+    /// An animating agent (pulsing banner, spinner) has chunks in flight at
+    /// the moment of every dispatch, laid out for the PREVIOUS width.
+    /// Presenting them is exactly the artifact the hold exists to cover, so
+    /// output inside the window must not release it — while the answering
+    /// repaint, which cannot arrive sooner than a signal delivery plus a
+    /// render pass, must.
+    @Test
+    func `only output past the in-flight window releases the hold`() {
+        let dispatched = Date()
+
+        #expect(InMemoryTerminalSession.isWithinInFlightWindow(
+            dispatchedAt: dispatched,
+            now: dispatched.addingTimeInterval(0.002)
+        ))
+        #expect(!InMemoryTerminalSession.isWithinInFlightWindow(
+            dispatchedAt: dispatched,
+            now: dispatched.addingTimeInterval(0.008)
+        ))
+        #expect(!InMemoryTerminalSession.isWithinInFlightWindow(
+            dispatchedAt: nil,
+            now: dispatched
+        ))
+    }
+
     /// The hold exists to bridge one redraw round-trip, not to gate the surface
     /// on it: a size whose grid is unchanged is never dispatched, so it must not
     /// touch the hold either.
