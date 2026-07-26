@@ -90,20 +90,36 @@ struct InMemoryTerminalSessionResizeTests {
         #expect(session.shouldHoldFrame == true)
     }
 
-    /// A resize arriving while a hold is active means the bounds moved again,
-    /// so the held frame is stale in size as well as content and would be
-    /// letterboxed against the new bounds. Drawing beats holding: the hold MUST
-    /// release rather than extend, otherwise a live drag pins the surface to the
-    /// frame from the drag's first step.
+    /// A resize arriving while a hold is active means the redraw in flight is
+    /// already for a stale size, so the wait starts over. Releasing instead
+    /// (the old latch) exposed the reflowed-but-not-repainted grid for every
+    /// drag step after the first — the composer visibly folding and springing
+    /// back. Ghostty's IOSurface layer anchors content top-left, so the
+    /// extended hold clips instead of stretching.
     @Test
-    func `a further grid change releases the frame hold instead of extending it`() {
+    func `a further grid change extends the frame hold`() {
         let session = InMemoryTerminalSession(write: { _ in }, resize: { _ in })
 
         session.updateViewport(metrics(columns: 100, rows: 40, widthPixels: 1700, heightPixels: 1480))
         #expect(session.shouldHoldFrame == true)
 
         session.updateViewport(metrics(columns: 101, rows: 40, widthPixels: 1717, heightPixels: 1480))
-        #expect(session.shouldHoldFrame == false)
+        #expect(session.shouldHoldFrame == true)
+    }
+
+    /// The release happens in `receive` — the app's bytes are in the grid, so
+    /// the next draw presents the app's frame, not the stale reflow.
+    @Test
+    func `received output releases the frame hold`() {
+        let session = InMemoryTerminalSession(write: { _ in }, resize: { _ in })
+
+        session.updateViewport(metrics(columns: 100, rows: 40, widthPixels: 1700, heightPixels: 1480))
+        #expect(session.shouldHoldFrame == true)
+
+        // No surface attached: bytes are dropped before reaching the grid,
+        // so the hold must survive.
+        session.receive("redraw")
+        #expect(session.shouldHoldFrame == true)
     }
 
     /// The hold exists to bridge one redraw round-trip, not to gate the surface

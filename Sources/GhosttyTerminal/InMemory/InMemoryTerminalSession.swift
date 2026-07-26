@@ -28,18 +28,8 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
            let ms = Double(raw) {
             return ms / 1000
         }
-        return 0.25
+        return 0.5
     }()
-
-    /// Set when a hold is released because the bounds moved again, and cleared
-    /// once a hold could have completed on its own — the app produced output, or
-    /// the timeout elapsed. While set, a further resize does not re-arm.
-    ///
-    /// Without this the release is a toggle: arm, release, re-arm, release… so a
-    /// drag alternates between holding a wrong-sized frame and drawing, and
-    /// whether the drag *ends* holding is decided by how many grid changes it
-    /// happened to contain rather than by having settled.
-    private var frameHoldSuppressed = false
 
     public init(
         write: @escaping @Sendable (Data) -> Void,
@@ -103,7 +93,6 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         guard Date() < deadline else {
             // The hold ran to its timeout; that counts as completed.
             frameHoldDeadline = nil
-            frameHoldSuppressed = false
             return false
         }
 
@@ -192,17 +181,17 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
             "terminal <- host \(TerminalDebugLog.describe(data))"
         )
 
-        // Fresh content for the current size: the held frame can be released, and
-        // a hold has now run its course, so the next resize may arm one again.
-        frameHoldDeadline = nil
-        frameHoldSuppressed = false
-
         data.withUnsafeBytes { buffer in
             guard let ptr = buffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
                 return
             }
             ghostty_surface_write_buffer(surface, ptr, UInt(buffer.count))
         }
+
+        // Release only once the fresh bytes are in the grid, so the next draw
+        // the coordinator runs presents the app's frame — never the stale
+        // reflow the hold existed to cover.
+        frameHoldDeadline = nil
     }
 
     /// Feed a UTF-8 string into the terminal from the host backend.
@@ -309,23 +298,17 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         }
 
         // The grid reflows now, but the app's redraw for this size is still a
-        // PTY round-trip away — hold the last good frame until it lands.
-        //
-        // If a hold is ALREADY active, the geometry just changed again (a live
-        // drag), which means the held frame is now the wrong *size* too: keeping
-        // it letterboxes/stretches stale pixels against the new bounds. Drawing
-        // — right size, stale layout — beats that, so release instead of
-        // extending. The hold therefore protects the case it is good at (bounds
-        // settled, content catching up, including the end of a drag) and steps
-        // out of the way while the bounds are still moving.
-        if frameHoldDeadline != nil {
-            // The bounds moved again while holding, so the held frame is stale in
-            // size as well as content and would be letterboxed against the new
-            // bounds: drawing beats holding. Stay disarmed until a hold could have
-            // completed, so the rest of the drag draws instead of alternating.
-            frameHoldDeadline = nil
-            frameHoldSuppressed = true
-        } else if !frameHoldSuppressed, Self.frameHoldTimeout > 0 {
+        // PTY round-trip away — keep presenting the last good frame until it
+        // lands. A further grid change during the hold means the redraw in
+        // flight is already for a stale size, so the wait starts over:
+        // arm-or-extend on EVERY dispatch. Ghostty's IOSurface layer anchors
+        // its contents top-left, so a held frame clips on shrink and exposes
+        // background on grow rather than stretching — which is why extending
+        // no longer letterboxes the way the pre-anchor implementation did.
+        // Measured agent response to a winsize: median 15ms, p90 133ms,
+        // max 419ms; the timeout must outlast that tail or the stale reflow
+        // pops in just before the real frame.
+        if Self.frameHoldTimeout > 0 {
             frameHoldDeadline = Date().addingTimeInterval(Self.frameHoldTimeout)
         }
         lock.unlock()
