@@ -301,8 +301,6 @@ final class TerminalSurfaceCoordinator {
         guard shouldRenderFrame(at: context.timestamp) else {
             return
         }
-
-
         pendingImmediateTick = false
         lastTickTimestamp = context.timestamp
         TerminalDebugLog.log(.render, "tick")
@@ -341,9 +339,7 @@ final class TerminalSurfaceCoordinator {
         }
     }
 
-
     private func tearDownSurface(removingBridgeFrom controller: TerminalController?) {
-
         TerminalDebugLog.log(.lifecycle, "tear down surface")
         tickScheduled = false
         if let session = configuration.inMemorySession {
@@ -382,13 +378,6 @@ final class TerminalSurfaceCoordinator {
         }
         return pendingImmediateTick || lastTickTimestamp == 0
     }
-
-    /// Re-arm a tick while a frame hold is active.
-    ///
-    /// Rendering here is wakeup-driven (no free-running display link), so a held
-    /// tick would otherwise be the last one until some unrelated event arrives.
-    /// The app's redraw normally wakes us on its own; this only covers the case
-    /// where nothing comes back, so the hold's timeout can actually take effect.
 
     private func scheduleTickIfNeeded() {
         guard canRenderFrame else {

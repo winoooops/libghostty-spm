@@ -15,11 +15,6 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
     private let writeHandler: @Sendable (Data) -> Void
     private let resizeHandler: @Sendable (InMemoryTerminalViewport) -> Void
 
-
-
-
-
-
     public init(
         write: @escaping @Sendable (Data) -> Void,
         resize: @escaping @Sendable (InMemoryTerminalViewport) -> Void
@@ -61,7 +56,6 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         defer { lock.unlock() }
         return surface
     }
-
 
     // MARK: - Viewport Read
 
@@ -151,9 +145,7 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
             }
             ghostty_surface_write_buffer(surface, ptr, UInt(buffer.count))
         }
-
     }
-
 
     /// Feed a UTF-8 string into the terminal from the host backend.
     public func receive(_ string: String) {
