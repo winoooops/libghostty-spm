@@ -23,14 +23,23 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
     /// point for telling in-flight output apart from the answering repaint.
     private var lastDispatchAt: Date?
 
-    /// Output arriving this soon after a dispatch was already in flight
-    /// BEFORE the agent could have seen the new winsize: a frame laid out for
-    /// the previous width. An agent that animates (a pulsing banner, a
-    /// spinner) emits such chunks constantly, and each one used to release
-    /// the hold and present the stale reflow. Measured: in-flight chunks
-    /// land within ~3ms of the dispatch; the fastest signal-to-repaint is
-    /// ~8ms (median 15ms), so 5ms separates the two populations.
-    private static let inFlightGuard: TimeInterval = 0.005
+    /// Whether any output has been fed to the grid since the last dispatch.
+    private var receivedSinceDispatch = false
+
+    /// How long the geometry must sit still before the hold may release.
+    ///
+    /// "First output after the resize" is NOT a repaint signal: an animating
+    /// agent (pulsing banner, spinner) emits continuously — measured on a
+    /// live session, output follows a dispatch within 0–3ms at median and
+    /// keeps arriving laid out for the OLD width for up to ~264ms. Any
+    /// chunk-triggered release therefore re-exposes the stale reflow, once
+    /// per key-repeat during a held-down resize. The only trustworthy signal
+    /// is quiet: no further grid change for this long, plus at least one
+    /// chunk landed, means whatever is on the grid is the agent's current
+    /// frame. During a held key (repeats every ~33ms) this never elapses, so
+    /// the surface stays frozen — clipped top-left, exactly how stock
+    /// terminals ride out a drag — and settles one beat after release.
+    private static let quietWindow: TimeInterval = 0.05
 
     /// Upper bound on a frame hold. A host-managed app that never answers the
     /// resize must not be able to freeze the surface indefinitely.
@@ -103,8 +112,19 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         defer { lock.unlock() }
 
         guard let deadline = frameHoldDeadline else { return false }
-        guard Date() < deadline else {
+
+        let now = Date()
+        guard now < deadline else {
             // The hold ran to its timeout; that counts as completed.
+            frameHoldDeadline = nil
+            return false
+        }
+
+        if Self.isReadyToRelease(
+            dispatchedAt: lastDispatchAt,
+            receivedSinceDispatch: receivedSinceDispatch,
+            now: now
+        ) {
             frameHoldDeadline = nil
             return false
         }
@@ -201,23 +221,23 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
             ghostty_surface_write_buffer(surface, ptr, UInt(buffer.count))
         }
 
-        // Release only once the fresh bytes are in the grid, so the next draw
-        // the coordinator runs presents the app's frame — never the stale
-        // reflow the hold existed to cover. Bytes inside the in-flight window
-        // are written (ordering is not negotiable) but do not release: they
-        // predate the winsize, so presenting them IS the stale frame.
-        if Self.isWithinInFlightWindow(dispatchedAt: lastDispatchAt, now: Date()) {
-            return
-        }
-        frameHoldDeadline = nil
+        // Receiving bytes no longer releases by itself — see `quietWindow`.
+        // It only records that the grid holds post-dispatch content; the
+        // release happens in `shouldHoldFrame` once the geometry has been
+        // quiet long enough.
+        receivedSinceDispatch = true
     }
 
-    /// Whether `now` is still inside the in-flight window after a dispatch —
-    /// see `inFlightGuard`. Static and pure so the boundary is testable
-    /// without a live ghostty surface.
-    static func isWithinInFlightWindow(dispatchedAt: Date?, now: Date) -> Bool {
-        guard let dispatchedAt else { return false }
-        return now.timeIntervalSince(dispatchedAt) < inFlightGuard
+    /// Whether the hold may release: the geometry sat still for the quiet
+    /// window and at least one chunk landed in the meantime. Static and pure
+    /// so the boundary is testable without a live ghostty surface.
+    static func isReadyToRelease(
+        dispatchedAt: Date?,
+        receivedSinceDispatch: Bool,
+        now: Date
+    ) -> Bool {
+        guard receivedSinceDispatch, let dispatchedAt else { return false }
+        return now.timeIntervalSince(dispatchedAt) >= quietWindow
     }
 
     /// Feed a UTF-8 string into the terminal from the host backend.
@@ -338,6 +358,7 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
             frameHoldDeadline = Date().addingTimeInterval(Self.frameHoldTimeout)
         }
         lastDispatchAt = Date()
+        receivedSinceDispatch = false
         lock.unlock()
 
         TerminalDebugLog.log(

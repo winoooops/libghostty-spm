@@ -107,41 +107,52 @@ struct InMemoryTerminalSessionResizeTests {
         #expect(session.shouldHoldFrame == true)
     }
 
-    /// The release happens in `receive` — the app's bytes are in the grid, so
-    /// the next draw presents the app's frame, not the stale reflow.
+    /// Dropped bytes (no surface attached) must not count as received —
+    /// nothing reached the grid, so the hold survives even past quiet.
     @Test
-    func `received output releases the frame hold`() {
+    func `dropped output does not release the frame hold`() {
         let session = InMemoryTerminalSession(write: { _ in }, resize: { _ in })
 
         session.updateViewport(metrics(columns: 100, rows: 40, widthPixels: 1700, heightPixels: 1480))
         #expect(session.shouldHoldFrame == true)
 
-        // No surface attached: bytes are dropped before reaching the grid,
-        // so the hold must survive.
         session.receive("redraw")
+        Thread.sleep(forTimeInterval: 0.06)
         #expect(session.shouldHoldFrame == true)
     }
 
-    /// An animating agent (pulsing banner, spinner) has chunks in flight at
-    /// the moment of every dispatch, laid out for the PREVIOUS width.
-    /// Presenting them is exactly the artifact the hold exists to cover, so
-    /// output inside the window must not release it — while the answering
-    /// repaint, which cannot arrive sooner than a signal delivery plus a
-    /// render pass, must.
+    /// An animating agent emits continuously — measured live, output follows
+    /// a dispatch within 0–3ms and keeps arriving laid out for the OLD width
+    /// for hundreds of ms. So arrival alone must never release; only quiet
+    /// geometry plus at-least-one-chunk does. During a held-down resize
+    /// (repeats ~33ms apart) the window never elapses and the surface stays
+    /// frozen instead of flashing the stale reflow once per repeat.
     @Test
-    func `only output past the in-flight window releases the hold`() {
+    func `only quiet geometry with received output releases the hold`() {
         let dispatched = Date()
 
-        #expect(InMemoryTerminalSession.isWithinInFlightWindow(
+        // Output landed, but the geometry only just moved: keep holding.
+        #expect(!InMemoryTerminalSession.isReadyToRelease(
             dispatchedAt: dispatched,
-            now: dispatched.addingTimeInterval(0.002)
+            receivedSinceDispatch: true,
+            now: dispatched.addingTimeInterval(0.01)
         ))
-        #expect(!InMemoryTerminalSession.isWithinInFlightWindow(
+        // Quiet long enough, and the grid holds post-dispatch content.
+        #expect(InMemoryTerminalSession.isReadyToRelease(
             dispatchedAt: dispatched,
-            now: dispatched.addingTimeInterval(0.008)
+            receivedSinceDispatch: true,
+            now: dispatched.addingTimeInterval(0.06)
         ))
-        #expect(!InMemoryTerminalSession.isWithinInFlightWindow(
+        // Quiet but nothing received: whatever is on the grid is still the
+        // pre-resize reflow — releasing would present exactly the artifact.
+        #expect(!InMemoryTerminalSession.isReadyToRelease(
+            dispatchedAt: dispatched,
+            receivedSinceDispatch: false,
+            now: dispatched.addingTimeInterval(0.06)
+        ))
+        #expect(!InMemoryTerminalSession.isReadyToRelease(
             dispatchedAt: nil,
+            receivedSinceDispatch: true,
             now: dispatched
         ))
     }
