@@ -69,7 +69,6 @@ final class TerminalSurfaceCoordinator {
     private var pendingImmediateTick = true
     private var lastTickTimestamp: TimeInterval = 0
     private var tickScheduled = false
-    private var frameHoldRecheckScheduled = false
 
     init() {
         bridge.onCellSizeChange = { [weak self] width, height in
