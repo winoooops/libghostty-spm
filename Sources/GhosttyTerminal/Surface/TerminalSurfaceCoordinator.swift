@@ -311,9 +311,25 @@ final class TerminalSurfaceCoordinator {
         // Skipped before the first paint — there is no good frame to hold yet.
         if lastTickTimestamp != 0,
            configuration.inMemorySession?.shouldHoldFrame == true {
+            // Skipping this coordinator's draw is NOT enough: ghostty's IO
+            // resize path wakes its own renderer thread, which keeps
+            // presenting frames regardless of anything here — a hold that
+            // only skips these calls has no visual authority (verified: no
+            // freeze is visible while held). Occlusion is the one lever the
+            // embedder has that ghostty's renderer respects, so borrow it to
+            // pause the producer for the duration of the hold.
+            if !frameHoldOccluded {
+                frameHoldOccluded = true
+                surface?.setOcclusion(false)
+            }
             TerminalDebugLog.log(.render, "tick held: resize redraw in flight")
             scheduleFrameHoldRecheck()
             return
+        }
+
+        if frameHoldOccluded {
+            frameHoldOccluded = false
+            surface?.setOcclusion(effectiveSurfaceVisible)
         }
 
         pendingImmediateTick = false
@@ -354,7 +370,13 @@ final class TerminalSurfaceCoordinator {
         }
     }
 
+    /// True while the frame hold has the surface occluded so ghostty's own
+    /// renderer stops presenting — see `tick`.
+    private var frameHoldOccluded = false
+
     private func tearDownSurface(removingBridgeFrom controller: TerminalController?) {
+        frameHoldOccluded = false
+
         TerminalDebugLog.log(.lifecycle, "tear down surface")
         tickScheduled = false
         if let session = configuration.inMemorySession {
