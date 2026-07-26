@@ -303,34 +303,6 @@ final class TerminalSurfaceCoordinator {
             return
         }
 
-        // A resize reflowed the grid but the app's redraw is still in flight:
-        // keep presenting the last good frame instead of one whose content is
-        // laid out for the previous size. `pendingImmediateTick` is deliberately
-        // NOT consumed here so the frame is drawn as soon as the hold clears;
-        // rendering is wakeup-driven, so also poll in case the app stays silent.
-        // Skipped before the first paint — there is no good frame to hold yet.
-        if lastTickTimestamp != 0,
-           configuration.inMemorySession?.shouldHoldFrame == true {
-            // Skipping this coordinator's draw is NOT enough: ghostty's IO
-            // resize path wakes its own renderer thread, which keeps
-            // presenting frames regardless of anything here — a hold that
-            // only skips these calls has no visual authority (verified: no
-            // freeze is visible while held). Occlusion is the one lever the
-            // embedder has that ghostty's renderer respects, so borrow it to
-            // pause the producer for the duration of the hold.
-            if !frameHoldOccluded {
-                frameHoldOccluded = true
-                surface?.setOcclusion(false)
-            }
-            TerminalDebugLog.log(.render, "tick held: resize redraw in flight")
-            scheduleFrameHoldRecheck()
-            return
-        }
-
-        if frameHoldOccluded {
-            frameHoldOccluded = false
-            surface?.setOcclusion(effectiveSurfaceVisible)
-        }
 
         pendingImmediateTick = false
         lastTickTimestamp = context.timestamp
@@ -370,12 +342,8 @@ final class TerminalSurfaceCoordinator {
         }
     }
 
-    /// True while the frame hold has the surface occluded so ghostty's own
-    /// renderer stops presenting — see `tick`.
-    private var frameHoldOccluded = false
 
     private func tearDownSurface(removingBridgeFrom controller: TerminalController?) {
-        frameHoldOccluded = false
 
         TerminalDebugLog.log(.lifecycle, "tear down surface")
         tickScheduled = false
@@ -422,18 +390,6 @@ final class TerminalSurfaceCoordinator {
     /// tick would otherwise be the last one until some unrelated event arrives.
     /// The app's redraw normally wakes us on its own; this only covers the case
     /// where nothing comes back, so the hold's timeout can actually take effect.
-    private func scheduleFrameHoldRecheck() {
-        guard !frameHoldRecheckScheduled else {
-            return
-        }
-
-        frameHoldRecheckScheduled = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            guard let self else { return }
-            frameHoldRecheckScheduled = false
-            requestImmediateTick()
-        }
-    }
 
     private func scheduleTickIfNeeded() {
         guard canRenderFrame else {

@@ -15,43 +15,10 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
     private let writeHandler: @Sendable (Data) -> Void
     private let resizeHandler: @Sendable (InMemoryTerminalViewport) -> Void
 
-    /// Wall-clock deadline until which the surface should keep presenting its
-    /// last good frame instead of the freshly-reflowed one. See `shouldHoldFrame`.
-    private var frameHoldDeadline: Date?
 
-    /// When the last grid change was dispatched to the host — the reference
-    /// point for telling in-flight output apart from the answering repaint.
-    private var lastDispatchAt: Date?
 
-    /// Whether any output has been fed to the grid since the last dispatch.
-    private var receivedSinceDispatch = false
 
-    /// How long the geometry must sit still before the hold may release.
-    ///
-    /// "First output after the resize" is NOT a repaint signal: an animating
-    /// agent (pulsing banner, spinner) emits continuously — measured on a
-    /// live session, output follows a dispatch within 0–3ms at median and
-    /// keeps arriving laid out for the OLD width for up to ~264ms. Any
-    /// chunk-triggered release therefore re-exposes the stale reflow, once
-    /// per key-repeat during a held-down resize. The only trustworthy signal
-    /// is quiet: no further grid change for this long, plus at least one
-    /// chunk landed, means whatever is on the grid is the agent's current
-    /// frame. During a held key (repeats every ~33ms) this never elapses, so
-    /// the surface stays frozen — clipped top-left, exactly how stock
-    /// terminals ride out a drag — and settles one beat after release.
-    private static let quietWindow: TimeInterval = 0.05
 
-    /// Upper bound on a frame hold. A host-managed app that never answers the
-    /// resize must not be able to freeze the surface indefinitely.
-    /// Tunable for experiments: VIMEFLOW_GHOSTTY_HOLD_MS overrides the timeout,
-    /// and 0 disables the hold entirely so its cost can be measured directly.
-    private static let frameHoldTimeout: TimeInterval = {
-        if let raw = ProcessInfo.processInfo.environment["VIMEFLOW_GHOSTTY_HOLD_MS"],
-           let ms = Double(raw) {
-            return ms / 1000
-        }
-        return 0.5
-    }()
 
     public init(
         write: @escaping @Sendable (Data) -> Void,
@@ -95,42 +62,6 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         return surface
     }
 
-    // MARK: - Resize Frame Hold
-
-    /// True while a dispatched resize is still waiting for the app's redraw.
-    ///
-    /// When a resize is dispatched, ghostty's grid has *already* reflowed to the
-    /// new size but still holds the OLD content: the host must deliver the new
-    /// winsize, the app must redraw, and those bytes must travel back over the
-    /// PTY. Drawing inside that window presents content laid out for the previous
-    /// size — the dislocated-frame flash seen during a live resize. The caller
-    /// keeps presenting the last good frame while this is true.
-    ///
-    /// Cleared by `receive` (the redraw landed) or by the timeout above.
-    var shouldHoldFrame: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-
-        guard let deadline = frameHoldDeadline else { return false }
-
-        let now = Date()
-        guard now < deadline else {
-            // The hold ran to its timeout; that counts as completed.
-            frameHoldDeadline = nil
-            return false
-        }
-
-        if Self.isReadyToRelease(
-            dispatchedAt: lastDispatchAt,
-            receivedSinceDispatch: receivedSinceDispatch,
-            now: now
-        ) {
-            frameHoldDeadline = nil
-            return false
-        }
-
-        return true
-    }
 
     // MARK: - Viewport Read
 
@@ -221,24 +152,8 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
             ghostty_surface_write_buffer(surface, ptr, UInt(buffer.count))
         }
 
-        // Receiving bytes no longer releases by itself — see `quietWindow`.
-        // It only records that the grid holds post-dispatch content; the
-        // release happens in `shouldHoldFrame` once the geometry has been
-        // quiet long enough.
-        receivedSinceDispatch = true
     }
 
-    /// Whether the hold may release: the geometry sat still for the quiet
-    /// window and at least one chunk landed in the meantime. Static and pure
-    /// so the boundary is testable without a live ghostty surface.
-    static func isReadyToRelease(
-        dispatchedAt: Date?,
-        receivedSinceDispatch: Bool,
-        now: Date
-    ) -> Bool {
-        guard receivedSinceDispatch, let dispatchedAt else { return false }
-        return now.timeIntervalSince(dispatchedAt) >= quietWindow
-    }
 
     /// Feed a UTF-8 string into the terminal from the host backend.
     public func receive(_ string: String) {
@@ -343,22 +258,6 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
             return
         }
 
-        // The grid reflows now, but the app's redraw for this size is still a
-        // PTY round-trip away — keep presenting the last good frame until it
-        // lands. A further grid change during the hold means the redraw in
-        // flight is already for a stale size, so the wait starts over:
-        // arm-or-extend on EVERY dispatch. Ghostty's IOSurface layer anchors
-        // its contents top-left, so a held frame clips on shrink and exposes
-        // background on grow rather than stretching — which is why extending
-        // no longer letterboxes the way the pre-anchor implementation did.
-        // Measured agent response to a winsize: median 15ms, p90 133ms,
-        // max 419ms; the timeout must outlast that tail or the stale reflow
-        // pops in just before the real frame.
-        if Self.frameHoldTimeout > 0 {
-            frameHoldDeadline = Date().addingTimeInterval(Self.frameHoldTimeout)
-        }
-        lastDispatchAt = Date()
-        receivedSinceDispatch = false
         lock.unlock()
 
         TerminalDebugLog.log(
