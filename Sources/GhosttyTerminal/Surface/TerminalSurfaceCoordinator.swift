@@ -170,7 +170,58 @@ final class TerminalSurfaceCoordinator {
 
     // MARK: - Metrics
 
+    // Ghostty's IO thread coalesces resize messages with a hardcoded 25ms
+    // trailing-only window (Thread.zig). A live divider drag posts a new
+    // pixel size every frame — faster than that window resolves — so the
+    // grid reflow runs permanently behind the layer bounds and the renderer
+    // composites the stale grid into the new frame: the mid-drag collapse.
+    // Bounding the stream here (leading edge for responsiveness, trailing
+    // edge so the final size always lands) hands the engine a signal its
+    // own window can actually settle on. Tunable per launch via
+    // GHOSTTY_SURFACE_RESIZE_THROTTLE_MS: default 32, 0 disables.
+    private static let resizeThrottleInterval: TimeInterval = {
+        let raw = ProcessInfo.processInfo
+            .environment["GHOSTTY_SURFACE_RESIZE_THROTTLE_MS"]
+        guard let raw, let ms = Double(raw), ms >= 0 else { return 0.032 }
+        return ms / 1000
+    }()
+
+    private var resizeThrottleArmed = false
+    private var resizeThrottleTrailing = false
+
     func synchronizeMetrics() {
+        guard Self.resizeThrottleInterval > 0 else {
+            performMetricsSync()
+            return
+        }
+
+        guard !resizeThrottleArmed else {
+            // Newest wins: the trailing fire re-reads the live view size,
+            // so nothing needs to be captured here.
+            resizeThrottleTrailing = true
+            return
+        }
+
+        performMetricsSync()
+        armResizeThrottle()
+    }
+
+    private func armResizeThrottle() {
+        resizeThrottleArmed = true
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.resizeThrottleInterval
+        ) { [weak self] in
+            guard let self else { return }
+            resizeThrottleArmed = false
+            guard resizeThrottleTrailing else { return }
+            resizeThrottleTrailing = false
+            guard surface != nil else { return }
+            performMetricsSync()
+            armResizeThrottle()
+        }
+    }
+
+    private func performMetricsSync() {
         guard let surface else {
             TerminalDebugLog.log(.metrics, "synchronizeMetrics skipped: missing surface")
             return
@@ -353,6 +404,7 @@ final class TerminalSurfaceCoordinator {
         surface?.free()
         surface = nil
         lastMetrics = nil
+        resizeThrottleTrailing = false
         pendingImmediateTick = true
         lastTickTimestamp = 0
         controller?.remove(bridge)
