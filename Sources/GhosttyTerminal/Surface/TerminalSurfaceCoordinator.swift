@@ -178,11 +178,11 @@ final class TerminalSurfaceCoordinator {
     // Bounding the stream here (leading edge for responsiveness, trailing
     // edge so the final size always lands) hands the engine a signal its
     // own window can actually settle on. Tunable per launch via
-    // GHOSTTY_SURFACE_RESIZE_THROTTLE_MS: default 32, 0 disables.
+    // GHOSTTY_SURFACE_RESIZE_THROTTLE_MS: default 96, 0 disables.
     private static let resizeThrottleInterval: TimeInterval = {
         let raw = ProcessInfo.processInfo
             .environment["GHOSTTY_SURFACE_RESIZE_THROTTLE_MS"]
-        guard let raw, let ms = Double(raw), ms >= 0 else { return 0.032 }
+        guard let raw, let ms = Double(raw), ms >= 0 else { return 0.096 }
         return ms / 1000
     }()
 
