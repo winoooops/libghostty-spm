@@ -186,10 +186,29 @@ final class TerminalSurfaceCoordinator {
         return ms / 1000
     }()
 
+    // A TUI that never re-emits its scrollback (a codex-style primary-screen
+    // transcript, unlike an alt-screen agent's full repaints) can be left
+    // showing stale-width row pixels after a resize — clipped at the new
+    // edge, with wrap fragments interleaved — even though the grid itself
+    // reflowed correctly. One full refresh repaints the settled frame from
+    // the grid. It must wait for REAL stillness: a full repaint of a large
+    // scrollback is slow enough to present as a blank flash, and firing it
+    // on every micro-pause of a drag reads as the pane blinking. Tunable via
+    // GHOSTTY_SURFACE_SETTLE_REFRESH_MS: default 250, 0 disables.
+    private static let settleRefreshDelay: TimeInterval = {
+        let raw = ProcessInfo.processInfo
+            .environment["GHOSTTY_SURFACE_SETTLE_REFRESH_MS"]
+        guard let raw, let ms = Double(raw), ms >= 0 else { return 0.25 }
+        return ms / 1000
+    }()
+
     private var resizeThrottleArmed = false
     private var resizeThrottleTrailing = false
+    private var settleRefreshGeneration = 0
+    private var lastSettleRefreshedMetrics: TerminalViewportMetrics?
 
     func synchronizeMetrics() {
+        scheduleSettleRefresh()
         guard Self.resizeThrottleInterval > 0 else {
             performMetricsSync()
             return
@@ -213,22 +232,31 @@ final class TerminalSurfaceCoordinator {
         ) { [weak self] in
             guard let self else { return }
             resizeThrottleArmed = false
-            guard resizeThrottleTrailing else {
-                // The burst is over: repaint everything from the reflowed
-                // grid. The renderer damages rows, and a TUI that never
-                // re-emits its scrollback (a codex-style primary-screen
-                // transcript, unlike an alt-screen agent's full repaints)
-                // can otherwise be left showing stale-width row pixels —
-                // clipped at the new edge, with wrap fragments interleaved —
-                // for as long as the pane stays at that width.
-                surface?.refresh()
-                requestImmediateTick()
-                return
-            }
+            guard resizeThrottleTrailing else { return }
             resizeThrottleTrailing = false
             guard surface != nil else { return }
             performMetricsSync()
             armResizeThrottle()
+        }
+    }
+
+    private func scheduleSettleRefresh() {
+        guard Self.settleRefreshDelay > 0 else { return }
+        settleRefreshGeneration += 1
+        let generation = settleRefreshGeneration
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.settleRefreshDelay
+        ) { [weak self] in
+            guard let self, generation == settleRefreshGeneration else {
+                return
+            }
+            // Only when the grid actually changed since the last refresh —
+            // focus churn and appearance syncs must not repaint scrollback.
+            guard let surface, lastMetrics != lastSettleRefreshedMetrics
+            else { return }
+            lastSettleRefreshedMetrics = lastMetrics
+            surface.refresh()
+            requestImmediateTick()
         }
     }
 
