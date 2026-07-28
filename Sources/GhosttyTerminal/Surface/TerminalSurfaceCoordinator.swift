@@ -213,7 +213,18 @@ final class TerminalSurfaceCoordinator {
         ) { [weak self] in
             guard let self else { return }
             resizeThrottleArmed = false
-            guard resizeThrottleTrailing else { return }
+            guard resizeThrottleTrailing else {
+                // The burst is over: repaint everything from the reflowed
+                // grid. The renderer damages rows, and a TUI that never
+                // re-emits its scrollback (a codex-style primary-screen
+                // transcript, unlike an alt-screen agent's full repaints)
+                // can otherwise be left showing stale-width row pixels —
+                // clipped at the new edge, with wrap fragments interleaved —
+                // for as long as the pane stays at that width.
+                surface?.refresh()
+                requestImmediateTick()
+                return
+            }
             resizeThrottleTrailing = false
             guard surface != nil else { return }
             performMetricsSync()
