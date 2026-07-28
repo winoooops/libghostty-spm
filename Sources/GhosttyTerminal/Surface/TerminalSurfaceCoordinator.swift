@@ -171,45 +171,41 @@ final class TerminalSurfaceCoordinator {
     // MARK: - Metrics
 
     // Ghostty's IO thread coalesces resize messages with a hardcoded 25ms
-    // trailing-only window (Thread.zig). A live divider drag posts a new
-    // pixel size every frame — faster than that window resolves — so the
-    // grid reflow runs permanently behind the layer bounds and the renderer
-    // composites the stale grid into the new frame: the mid-drag collapse.
-    // Bounding the stream here (leading edge for responsiveness, trailing
-    // edge so the final size always lands) hands the engine a signal its
-    // own window can actually settle on. Tunable per launch via
-    // GHOSTTY_SURFACE_RESIZE_THROTTLE_MS: default 32, 0 disables.
-    private static let resizeThrottleInterval: TimeInterval = {
-        let raw = ProcessInfo.processInfo
-            .environment["GHOSTTY_SURFACE_RESIZE_THROTTLE_MS"]
-        guard let raw, let ms = Double(raw), ms >= 0 else { return 0.032 }
+    // trailing-only window (Thread.zig). For an alt-screen TUI that fully
+    // repaints on every winsize (Claude Code), a live divider drag posts new
+    // sizes faster than that window resolves — the grid reflow runs
+    // permanently behind the layer bounds and the renderer composites the
+    // stale grid into the new frame: the mid-drag collapse. Bounding the
+    // stream (leading edge for responsiveness, trailing edge so the final
+    // size always lands) hands the engine a signal it can settle on.
+    //
+    // The right window is CONTENT-dependent, so it is a per-surface value
+    // the host sets (`resizeThrottleInterval`): a primary-screen transcript
+    // that never re-emits its scrollback (codex-style) renders best fully
+    // unthrottled — large throttled jumps read as blinking — while the
+    // alt-screen full-repaint agents need ~96ms. 0 disables. The env var
+    // GHOSTTY_SURFACE_RESIZE_THROTTLE_MS, when set, overrides every surface
+    // for whole-process A/B runs.
+    private static let resizeThrottleOverride: TimeInterval? = {
+        guard
+            let raw = ProcessInfo.processInfo
+                .environment["GHOSTTY_SURFACE_RESIZE_THROTTLE_MS"],
+            let ms = Double(raw), ms >= 0
+        else { return nil }
         return ms / 1000
     }()
 
-    // A TUI that never re-emits its scrollback (a codex-style primary-screen
-    // transcript, unlike an alt-screen agent's full repaints) can be left
-    // showing stale-width row pixels after a resize — clipped at the new
-    // edge, with wrap fragments interleaved — even though the grid itself
-    // reflowed correctly. One full refresh repaints the settled frame from
-    // the grid. It must wait for REAL stillness: a full repaint of a large
-    // scrollback is slow enough to present as a blank flash, and firing it
-    // on every micro-pause of a drag reads as the pane blinking. Tunable via
-    // GHOSTTY_SURFACE_SETTLE_REFRESH_MS: default 250, 0 disables.
-    private static let settleRefreshDelay: TimeInterval = {
-        let raw = ProcessInfo.processInfo
-            .environment["GHOSTTY_SURFACE_SETTLE_REFRESH_MS"]
-        guard let raw, let ms = Double(raw), ms >= 0 else { return 0.25 }
-        return ms / 1000
-    }()
+    var resizeThrottleInterval: TimeInterval = 0
+
+    private var effectiveResizeThrottle: TimeInterval {
+        Self.resizeThrottleOverride ?? resizeThrottleInterval
+    }
 
     private var resizeThrottleArmed = false
     private var resizeThrottleTrailing = false
-    private var settleRefreshGeneration = 0
-    private var lastSettleRefreshedMetrics: TerminalViewportMetrics?
 
     func synchronizeMetrics() {
-        scheduleSettleRefresh()
-        guard Self.resizeThrottleInterval > 0 else {
+        guard effectiveResizeThrottle > 0 else {
             performMetricsSync()
             return
         }
@@ -228,7 +224,7 @@ final class TerminalSurfaceCoordinator {
     private func armResizeThrottle() {
         resizeThrottleArmed = true
         DispatchQueue.main.asyncAfter(
-            deadline: .now() + Self.resizeThrottleInterval
+            deadline: .now() + effectiveResizeThrottle
         ) { [weak self] in
             guard let self else { return }
             resizeThrottleArmed = false
@@ -237,26 +233,6 @@ final class TerminalSurfaceCoordinator {
             guard surface != nil else { return }
             performMetricsSync()
             armResizeThrottle()
-        }
-    }
-
-    private func scheduleSettleRefresh() {
-        guard Self.settleRefreshDelay > 0 else { return }
-        settleRefreshGeneration += 1
-        let generation = settleRefreshGeneration
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + Self.settleRefreshDelay
-        ) { [weak self] in
-            guard let self, generation == settleRefreshGeneration else {
-                return
-            }
-            // Only when the grid actually changed since the last refresh —
-            // focus churn and appearance syncs must not repaint scrollback.
-            guard let surface, lastMetrics != lastSettleRefreshedMetrics
-            else { return }
-            lastSettleRefreshedMetrics = lastMetrics
-            surface.refresh()
-            requestImmediateTick()
         }
     }
 

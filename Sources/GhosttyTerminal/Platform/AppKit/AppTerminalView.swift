@@ -39,6 +39,14 @@
             core.setDisplayVisible(visible)
         }
 
+        /// Host-managed resize coalescing for this surface, in milliseconds.
+        /// Content-dependent: alt-screen full-repaint TUIs want ~96ms so the
+        /// engine's reflow can keep up with a drag; primary-screen
+        /// transcripts render best at 0 (unthrottled). Default is 0.
+        open func setResizeThrottle(milliseconds: Double) {
+            core.resizeThrottleInterval = max(0, milliseconds) / 1000
+        }
+
         var surface: TerminalSurface? {
             core.surface
         }
