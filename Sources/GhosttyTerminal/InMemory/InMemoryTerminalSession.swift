@@ -15,12 +15,28 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
     private let writeHandler: @Sendable (Data) -> Void
     private let resizeHandler: @Sendable (InMemoryTerminalViewport) -> Void
 
+    /// Skip resize dispatches whose grid is unchanged and only the pixel
+    /// metrics moved.
+    ///
+    /// Off by default: the resize closure is a lossless contract, and a host
+    /// that reads `widthPixels`/`heightPixels` would otherwise stop seeing
+    /// sub-cell changes — permanently, if the grid never changes again.
+    ///
+    /// Worth enabling for a host that only consumes columns and rows and
+    /// repaints on every dispatch. A live divider drag produces mostly
+    /// pixel-only updates (measured at ~78% of metric updates across one
+    /// session's drags), and each one asks the terminal app for a full
+    /// repaint that re-wraps its content.
+    public let suppressesPixelOnlyResizes: Bool
+
     public init(
         write: @escaping @Sendable (Data) -> Void,
-        resize: @escaping @Sendable (InMemoryTerminalViewport) -> Void
+        resize: @escaping @Sendable (InMemoryTerminalViewport) -> Void,
+        suppressesPixelOnlyResizes: Bool = false
     ) {
         writeHandler = write
         resizeHandler = resize
+        self.suppressesPixelOnlyResizes = suppressesPixelOnlyResizes
     }
 
     // MARK: - Surface Lifecycle
@@ -229,18 +245,17 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
             )
             return
         }
-        // Only a change in grid size changes what a terminal app has to draw; a
-        // sub-cell pixel delta does not. Dispatching those too asks the app for a
-        // full repaint on nearly every frame of a drag — measured at 5566 host
-        // resizes across one session's drags, ~78% of all metric updates — and
-        // each repaint re-wraps its content, which is what makes a fast drag jump
-        // vertically. Keep tracking the latest pixel metrics (so the next real
-        // dispatch carries them) but only tell the app when its grid changes.
+        // Opt-in (`suppressesPixelOnlyResizes`): only a change in grid size
+        // changes what a terminal app has to draw, so a host that repaints on
+        // every dispatch can skip the sub-cell ones. The latest pixel metrics
+        // are still recorded, so a later grid change carries them — but a host
+        // that consumes pixels must leave this off, because without a further
+        // grid change that update is never delivered.
         let gridChanged = lastResize.map {
             $0.columns != mergedResize.columns || $0.rows != mergedResize.rows
         } ?? true
         lastResize = mergedResize
-        guard gridChanged else {
+        if suppressesPixelOnlyResizes, !gridChanged {
             lock.unlock()
             TerminalDebugLog.log(
                 .metrics,

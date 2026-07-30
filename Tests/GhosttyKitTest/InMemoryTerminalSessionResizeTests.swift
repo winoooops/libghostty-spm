@@ -38,16 +38,17 @@ struct InMemoryTerminalSessionResizeTests {
         )
     }
 
-    /// A terminal app redraws for its grid size, so a size whose columns and
-    /// rows are unchanged asks it to repaint for a result it cannot render
-    /// differently. During a drag that is nearly every frame, and each repaint
-    /// re-wraps the app's content — the dispatch MUST be suppressed.
+    /// With the opt-in enabled, a terminal app redraws for its grid size, so a
+    /// size whose columns and rows are unchanged asks it to repaint for a
+    /// result it cannot render differently. During a drag that is nearly every
+    /// frame, and each repaint re-wraps the app's content.
     @Test
-    func `sub-cell size change does not dispatch a host resize`() {
+    func `sub-cell size change does not dispatch when suppression is enabled`() {
         let recorder = ResizeRecorder()
         let session = InMemoryTerminalSession(
             write: { _ in },
-            resize: { recorder.record($0) }
+            resize: { recorder.record($0) },
+            suppressesPixelOnlyResizes: true
         )
 
         session.updateViewport(metrics(columns: 100, rows: 40, widthPixels: 1700, heightPixels: 1480))
@@ -66,7 +67,8 @@ struct InMemoryTerminalSessionResizeTests {
         let recorder = ResizeRecorder()
         let session = InMemoryTerminalSession(
             write: { _ in },
-            resize: { recorder.record($0) }
+            resize: { recorder.record($0) },
+            suppressesPixelOnlyResizes: true
         )
 
         session.updateViewport(metrics(columns: 100, rows: 40, widthPixels: 1700, heightPixels: 1480))
@@ -76,6 +78,26 @@ struct InMemoryTerminalSessionResizeTests {
         #expect(recorder.dispatches.count == 2)
         #expect(recorder.dispatches.last?.columns == 101)
         #expect(recorder.dispatches.last?.widthPixels == 1717)
+    }
+
+    /// The default must stay lossless. A host that reads the pixel fields
+    /// would otherwise stop seeing sub-cell changes — permanently, if the grid
+    /// never changes again — so suppression cannot be the default.
+    @Test
+    func `pixel-only changes still dispatch by default`() {
+        let recorder = ResizeRecorder()
+        let session = InMemoryTerminalSession(
+            write: { _ in },
+            resize: { recorder.record($0) }
+        )
+
+        #expect(!session.suppressesPixelOnlyResizes)
+
+        session.updateViewport(metrics(columns: 100, rows: 40, widthPixels: 1700, heightPixels: 1480))
+        session.updateViewport(metrics(columns: 100, rows: 40, widthPixels: 1712, heightPixels: 1480))
+
+        #expect(recorder.dispatches.count == 2)
+        #expect(recorder.dispatches.last?.widthPixels == 1712)
     }
 
 

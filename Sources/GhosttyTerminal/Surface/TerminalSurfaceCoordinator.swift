@@ -188,7 +188,8 @@ final class TerminalSurfaceCoordinator {
     // size always lands) hands the engine a signal it can settle on.
     //
     // The right window is CONTENT-dependent, so it is a per-surface value
-    // the host sets (`resizeThrottleInterval`): a primary-screen transcript
+    // the host sets (`TerminalSurfaceOptions.resizeThrottleMilliseconds`, or
+    // the platform setter for a live change): a primary-screen transcript
     // that never re-emits its scrollback (codex-style) renders best fully
     // unthrottled — large throttled jumps read as blinking — while the
     // alt-screen full-repaint agents need ~96ms. 0 disables. The env var
@@ -203,10 +204,15 @@ final class TerminalSurfaceCoordinator {
         return ms / 1000
     }()
 
-    var resizeThrottleInterval: TimeInterval = 0
+    /// Set directly by a platform view; otherwise sourced from
+    /// `configuration.resizeThrottleMilliseconds`. Kept as an override so the
+    /// AppKit setter can adjust a live surface without rebuilding it.
+    var resizeThrottleInterval: TimeInterval?
 
     private var effectiveResizeThrottle: TimeInterval {
-        Self.resizeThrottleOverride ?? resizeThrottleInterval
+        if let override = Self.resizeThrottleOverride { return override }
+        if let interval = resizeThrottleInterval { return interval }
+        return max(0, configuration.resizeThrottleMilliseconds) / 1000
     }
 
     private var resizeThrottleArmed = false
@@ -320,18 +326,23 @@ final class TerminalSurfaceCoordinator {
 
         lastMetrics = metrics
         TerminalDebugLog.log(.metrics, "sync updated \(metrics.debugSummary)")
-        // vimeflow parity fix: do NOT dispatch a host resize here. This runs on
-        // the AppKit thread right after setSize(), i.e. BEFORE ghostty's IO
-        // thread commits the grid reflow — a premature winsize. It reached the
-        // host PTY ahead of the reflow and then made the correctly-phased
-        // IO-thread `receiveResizeCallback` (from HostManaged.resize inside the
-        // real Termio.resize) look "unchanged" and get deduped, so a
-        // relative-cursor TUI (e.g. Claude Code) repainted against a winsize
-        // that led the grid and its clamped CUD merged the footer. Removing
-        // this dispatch makes receiveResizeCallback the sole PTY-resize source,
-        // exactly like stock Ghostty (pty.setSize only inside Termio.resize,
-        // atomic with the grid). Local UI metrics still flow via the delegate
-        // below and onMetricsUpdate.
+        // Deliberately no host resize dispatch here. This runs on the AppKit
+        // thread right after setSize(), i.e. before the engine's IO thread has
+        // run the resize operation at all — the host would learn the new size
+        // from a thread that has not yet reflowed anything.
+        //
+        // Worse, it poisons the correctly-phased notification: the IO thread's
+        // `receiveResizeCallback` (invoked from HostManaged.resize, immediately
+        // before `terminal.resize`, both serial within one IO-thread resize
+        // operation) then arrives carrying a size the session already recorded,
+        // and is discarded as unchanged. A relative-cursor TUI therefore
+        // repainted against a winsize that led the grid, and its clamped CUD
+        // merged the footer.
+        //
+        // Leaving `receiveResizeCallback` as the sole PTY-resize source matches
+        // stock Ghostty, where pty.setSize runs only inside Termio.resize.
+        // Local UI metrics still flow via the delegate below and
+        // onMetricsUpdate.
         if let delegate = delegate as? any TerminalSurfaceGridResizeDelegate {
             delegate.terminalDidResize(surfaceSize)
         } else if let delegate = delegate as? any TerminalSurfaceResizeDelegate {

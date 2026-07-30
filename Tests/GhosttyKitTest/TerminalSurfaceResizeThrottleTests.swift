@@ -42,7 +42,9 @@ struct TerminalSurfaceResizeThrottleTests {
         coordinator.viewSize = { (100, 50) }
         coordinator.isAttached = { true }
 
-        #expect(coordinator.resizeThrottleInterval == 0)
+        // No platform override and no configured window: coalescing is off.
+        #expect(coordinator.resizeThrottleInterval == nil)
+        #expect(coordinator.configuration.resizeThrottleMilliseconds == 0)
         coordinator.synchronizeMetrics()
         coordinator.synchronizeMetrics()
 
@@ -65,6 +67,50 @@ struct TerminalSurfaceResizeThrottleTests {
 
         coordinator.synchronizeMetrics()
         #expect(coordinator.testHooks_throttleTrailing)
+    }
+
+    @Test
+    func `the throttle can be configured without rebuilding the surface`() {
+        var options = TerminalSurfaceOptions()
+        #expect(options.resizeThrottleMilliseconds == 0)
+
+        var throttled = options
+        throttled.resizeThrottleMilliseconds = 96
+
+        // Delivery policy is not surface identity: changing only the throttle
+        // must not look like a configuration change, or the coordinator would
+        // tear down a live surface and discard its grid and scrollback.
+        #expect(options.isEquivalent(to: throttled))
+
+        let coordinator = TerminalSurfaceCoordinator()
+        coordinator.viewSize = { (100, 50) }
+        coordinator.isAttached = { true }
+        coordinator.configuration = throttled
+
+        coordinator.synchronizeMetrics()
+        #expect(coordinator.testHooks_throttleArmed)
+    }
+
+    @Test
+    func `the platform setter overrides the configured throttle`() {
+        var options = TerminalSurfaceOptions()
+        options.resizeThrottleMilliseconds = 5000
+
+        let coordinator = TerminalSurfaceCoordinator()
+        coordinator.viewSize = { (100, 50) }
+        coordinator.isAttached = { true }
+        coordinator.configuration = options
+
+        // An explicit 0 from the platform layer disables coalescing even
+        // though the configuration asks for it.
+        coordinator.resizeThrottleInterval = 0
+        coordinator.synchronizeMetrics()
+        #expect(!coordinator.testHooks_throttleArmed)
+
+        // Clearing the override falls back to the configured value.
+        coordinator.resizeThrottleInterval = nil
+        coordinator.synchronizeMetrics()
+        #expect(coordinator.testHooks_throttleArmed)
     }
 
     @Test
