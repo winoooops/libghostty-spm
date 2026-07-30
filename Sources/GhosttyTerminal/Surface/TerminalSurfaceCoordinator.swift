@@ -106,6 +106,13 @@ final class TerminalSurfaceCoordinator {
         // ("rebuilding on every reattach discards Ghostty's scrollback/state"),
         // which cannot help while the teardown happens before the checks.
         if surface != nil, previousController == nil, !hasValidViewSize {
+            // The rebuild is owed, not cancelled. Configuration options are
+            // consumed only by createSurface, and no caller re-runs this once
+            // the view regains a size (fitToSize, viewDidMoveToWindow and the
+            // UIKit twin all take the surface != nil branch and merely sync
+            // metrics). Dropping the request outright would leave a hidden
+            // pane running its old configuration indefinitely.
+            pendingRebuild = true
             let size = viewSize()
             TerminalDebugLog.log(
                 .lifecycle,
@@ -114,6 +121,7 @@ final class TerminalSurfaceCoordinator {
 
             return
         }
+        pendingRebuild = false
 
         tearDownSurface(removingBridgeFrom: previousController ?? controller)
         guard let controller else {
@@ -203,8 +211,24 @@ final class TerminalSurfaceCoordinator {
 
     private var resizeThrottleArmed = false
     private var resizeThrottleTrailing = false
+    /// Invalidates in-flight throttle timers across a teardown. A timer
+    /// armed for the old surface must not size — or re-arm against — the
+    /// surface that replaced it.
+    private var resizeThrottleGeneration = 0
+    /// A rebuild deferred by the zero-size guard above, replayed by
+    /// `synchronizeMetrics` as soon as the view has a usable size again.
+    private var pendingRebuild = false
 
     func synchronizeMetrics() {
+        // Redeem a rebuild the zero-size guard deferred. Every caller that
+        // could restore a usable size lands here, so this is the one place
+        // that reliably observes the transition.
+        if pendingRebuild, hasValidViewSize {
+            pendingRebuild = false
+            rebuildIfReady()
+            return
+        }
+
         guard effectiveResizeThrottle > 0 else {
             performMetricsSync()
             return
@@ -223,10 +247,16 @@ final class TerminalSurfaceCoordinator {
 
     private func armResizeThrottle() {
         resizeThrottleArmed = true
+        let generation = resizeThrottleGeneration
         DispatchQueue.main.asyncAfter(
             deadline: .now() + effectiveResizeThrottle
         ) { [weak self] in
             guard let self else { return }
+            // A teardown bumped the generation: this timer belongs to a
+            // surface that no longer exists. Returning without touching
+            // `resizeThrottleArmed` leaves the current surface's own state
+            // alone.
+            guard generation == resizeThrottleGeneration else { return }
             resizeThrottleArmed = false
             guard resizeThrottleTrailing else { return }
             resizeThrottleTrailing = false
@@ -387,6 +417,20 @@ final class TerminalSurfaceCoordinator {
             .terminalDidChangeFocus(focused)
     }
 
+    #if DEBUG
+        // Test access to the host-managed resize state. Read-only apart from
+        // `pendingRebuild`, which tests set to drive the redemption path
+        // without needing a real ghostty surface.
+        var testHooks_pendingRebuild: Bool {
+            get { pendingRebuild }
+            set { pendingRebuild = newValue }
+        }
+
+        var testHooks_throttleArmed: Bool { resizeThrottleArmed }
+        var testHooks_throttleTrailing: Bool { resizeThrottleTrailing }
+        var testHooks_throttleGeneration: Int { resizeThrottleGeneration }
+    #endif
+
     // MARK: - Cleanup
 
     func freeSurface() {
@@ -419,6 +463,11 @@ final class TerminalSurfaceCoordinator {
         surface?.free()
         surface = nil
         lastMetrics = nil
+        // Retire any armed timer with the surface it was armed for, and
+        // clear the gate so the replacement surface sizes immediately
+        // instead of being suppressed by the old surface's armed flag.
+        resizeThrottleGeneration &+= 1
+        resizeThrottleArmed = false
         resizeThrottleTrailing = false
         pendingImmediateTick = true
         lastTickTimestamp = 0
