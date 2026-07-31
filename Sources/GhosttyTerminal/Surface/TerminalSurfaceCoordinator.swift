@@ -178,49 +178,6 @@ final class TerminalSurfaceCoordinator {
 
     // MARK: - Metrics
 
-    // Ghostty's IO thread coalesces resize messages with a hardcoded 25ms
-    // trailing-only window (Thread.zig). For an alt-screen TUI that fully
-    // repaints on every winsize (Claude Code), a live divider drag posts new
-    // sizes faster than that window resolves — the grid reflow runs
-    // permanently behind the layer bounds and the renderer composites the
-    // stale grid into the new frame: the mid-drag collapse. Bounding the
-    // stream (leading edge for responsiveness, trailing edge so the final
-    // size always lands) hands the engine a signal it can settle on.
-    //
-    // The right window is CONTENT-dependent, so it is a per-surface value
-    // the host sets (`TerminalSurfaceOptions.resizeThrottleMilliseconds`, or
-    // the platform setter for a live change): a primary-screen transcript
-    // that never re-emits its scrollback (codex-style) renders best fully
-    // unthrottled — large throttled jumps read as blinking — while the
-    // alt-screen full-repaint agents need ~96ms. 0 disables. The env var
-    // GHOSTTY_SURFACE_RESIZE_THROTTLE_MS, when set, overrides every surface
-    // for whole-process A/B runs.
-    private static let resizeThrottleOverride: TimeInterval? = {
-        guard
-            let raw = ProcessInfo.processInfo
-                .environment["GHOSTTY_SURFACE_RESIZE_THROTTLE_MS"],
-            let ms = Double(raw), ms >= 0
-        else { return nil }
-        return ms / 1000
-    }()
-
-    /// Set directly by a platform view; otherwise sourced from
-    /// `configuration.resizeThrottleMilliseconds`. Kept as an override so the
-    /// AppKit setter can adjust a live surface without rebuilding it.
-    var resizeThrottleInterval: TimeInterval?
-
-    private var effectiveResizeThrottle: TimeInterval {
-        if let override = Self.resizeThrottleOverride { return override }
-        if let interval = resizeThrottleInterval { return interval }
-        return max(0, configuration.resizeThrottleMilliseconds) / 1000
-    }
-
-    private var resizeThrottleArmed = false
-    private var resizeThrottleTrailing = false
-    /// Invalidates in-flight throttle timers across a teardown. A timer
-    /// armed for the old surface must not size — or re-arm against — the
-    /// surface that replaced it.
-    private var resizeThrottleGeneration = 0
     /// A rebuild deferred by the zero-size guard above, replayed by
     /// `synchronizeMetrics` as soon as the view has a usable size again.
     private var pendingRebuild = false
@@ -235,43 +192,7 @@ final class TerminalSurfaceCoordinator {
             return
         }
 
-        guard effectiveResizeThrottle > 0 else {
-            performMetricsSync()
-            return
-        }
-
-        guard !resizeThrottleArmed else {
-            // Newest wins: the trailing fire re-reads the live view size,
-            // so nothing needs to be captured here.
-            resizeThrottleTrailing = true
-            return
-        }
-
-        if performMetricsSync() {
-            armResizeThrottle()
-        }
-    }
-
-    private func armResizeThrottle() {
-        resizeThrottleArmed = true
-        let generation = resizeThrottleGeneration
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + effectiveResizeThrottle
-        ) { [weak self] in
-            guard let self else { return }
-            // A teardown bumped the generation: this timer belongs to a
-            // surface that no longer exists. Returning without touching
-            // `resizeThrottleArmed` leaves the current surface's own state
-            // alone.
-            guard generation == resizeThrottleGeneration else { return }
-            resizeThrottleArmed = false
-            guard resizeThrottleTrailing else { return }
-            resizeThrottleTrailing = false
-            guard surface != nil else { return }
-            if performMetricsSync() {
-                armResizeThrottle()
-            }
-        }
+        _ = performMetricsSync()
     }
 
     private func performMetricsSync() -> Bool {
@@ -453,9 +374,6 @@ final class TerminalSurfaceCoordinator {
             set { pendingRebuild = newValue }
         }
 
-        var testHooks_throttleArmed: Bool { resizeThrottleArmed }
-        var testHooks_throttleTrailing: Bool { resizeThrottleTrailing }
-        var testHooks_throttleGeneration: Int { resizeThrottleGeneration }
         var testHooks_metricsSyncResult: Bool?
     #endif
 
@@ -491,12 +409,6 @@ final class TerminalSurfaceCoordinator {
         surface?.free()
         surface = nil
         lastMetrics = nil
-        // Retire any armed timer with the surface it was armed for, and
-        // clear the gate so the replacement surface sizes immediately
-        // instead of being suppressed by the old surface's armed flag.
-        resizeThrottleGeneration &+= 1
-        resizeThrottleArmed = false
-        resizeThrottleTrailing = false
         pendingImmediateTick = true
         lastTickTimestamp = 0
         controller?.remove(bridge)
