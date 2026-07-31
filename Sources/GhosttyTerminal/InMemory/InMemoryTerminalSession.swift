@@ -12,15 +12,33 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
     private let lock = NSLock()
     private var surface: ghostty_surface_t?
     private var lastResize: InMemoryTerminalViewport?
+    private var latestCellWidthPixels: UInt32 = 0
+    private var latestCellHeightPixels: UInt32 = 0
     private let writeHandler: @Sendable (Data) -> Void
     private let resizeHandler: @Sendable (InMemoryTerminalViewport) -> Void
 
+    /// Skip resize dispatches whose grid is unchanged and only the pixel
+    /// metrics moved.
+    ///
+    /// Off by default: the resize closure is a lossless contract, and a host
+    /// that reads `widthPixels`/`heightPixels` would otherwise stop seeing
+    /// sub-cell changes — permanently, if the grid never changes again.
+    ///
+    /// Worth enabling for a host that only consumes columns and rows and
+    /// repaints on every dispatch. A live divider drag produces mostly
+    /// pixel-only updates (measured at ~78% of metric updates across one
+    /// session's drags), and each one asks the terminal app for a full
+    /// repaint that re-wraps its content.
+    public let suppressesPixelOnlyResizes: Bool
+
     public init(
         write: @escaping @Sendable (Data) -> Void,
-        resize: @escaping @Sendable (InMemoryTerminalViewport) -> Void
+        resize: @escaping @Sendable (InMemoryTerminalViewport) -> Void,
+        suppressesPixelOnlyResizes: Bool = false
     ) {
         writeHandler = write
         resizeHandler = resize
+        self.suppressesPixelOnlyResizes = suppressesPixelOnlyResizes
     }
 
     // MARK: - Surface Lifecycle
@@ -108,16 +126,12 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         return String(decoding: bytes, as: UTF8.self)
     }
 
-    func updateViewport(_ size: TerminalGridMetrics) {
-        TerminalDebugLog.log(.metrics, "in-memory viewport update \(size.debugSummary)")
-        dispatchResize(InMemoryTerminalViewport(
-            columns: size.columns,
-            rows: size.rows,
-            widthPixels: size.widthPixels,
-            heightPixels: size.heightPixels,
-            cellWidthPixels: size.cellWidthPixels,
-            cellHeightPixels: size.cellHeightPixels
-        ))
+    func updateCellSize(widthPixels: UInt32, heightPixels: UInt32) {
+        guard widthPixels > 0, heightPixels > 0 else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        latestCellWidthPixels = widthPixels
+        latestCellHeightPixels = heightPixels
     }
 
     // MARK: - Receiving Data
@@ -229,7 +243,26 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
             )
             return
         }
+        // Opt-in (`suppressesPixelOnlyResizes`): only a change in grid size
+        // changes what a terminal app has to draw, so a host that repaints on
+        // every dispatch can skip the sub-cell ones. The latest pixel metrics
+        // are still recorded, so a later grid change carries them — but a host
+        // that consumes pixels must leave this off, because without a further
+        // grid change that update is never delivered.
+        let gridChanged = lastResize.map {
+            $0.columns != mergedResize.columns || $0.rows != mergedResize.rows
+        } ?? true
         lastResize = mergedResize
+        if suppressesPixelOnlyResizes, !gridChanged {
+            lock.unlock()
+            TerminalDebugLog.log(
+                .metrics,
+                "resize sub-cell skipped cols=\(mergedResize.columns) rows=\(mergedResize.rows) pixels=\(mergedResize.widthPixels)x\(mergedResize.heightPixels)"
+            )
+
+            return
+        }
+
         lock.unlock()
 
         TerminalDebugLog.log(
@@ -240,15 +273,17 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
     }
 
     private func mergedResize(_ resize: InMemoryTerminalViewport) -> InMemoryTerminalViewport {
-        guard let lastResize else { return resize }
-
         return InMemoryTerminalViewport(
             columns: resize.columns,
             rows: resize.rows,
-            widthPixels: resize.widthPixels == 0 ? lastResize.widthPixels : resize.widthPixels,
-            heightPixels: resize.heightPixels == 0 ? lastResize.heightPixels : resize.heightPixels,
-            cellWidthPixels: resize.cellWidthPixels == 0 ? lastResize.cellWidthPixels : resize.cellWidthPixels,
-            cellHeightPixels: resize.cellHeightPixels == 0 ? lastResize.cellHeightPixels : resize.cellHeightPixels
+            widthPixels: resize.widthPixels == 0 ? lastResize?.widthPixels ?? 0 : resize.widthPixels,
+            heightPixels: resize.heightPixels == 0 ? lastResize?.heightPixels ?? 0 : resize.heightPixels,
+            cellWidthPixels: resize.cellWidthPixels == 0
+                ? (latestCellWidthPixels == 0 ? lastResize?.cellWidthPixels ?? 0 : latestCellWidthPixels)
+                : resize.cellWidthPixels,
+            cellHeightPixels: resize.cellHeightPixels == 0
+                ? (latestCellHeightPixels == 0 ? lastResize?.cellHeightPixels ?? 0 : latestCellHeightPixels)
+                : resize.cellHeightPixels
         )
     }
 }
