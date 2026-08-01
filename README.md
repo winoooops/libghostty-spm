@@ -182,6 +182,12 @@ The bundled `libghostty` is a trimmed build optimized for sandboxed, embedded us
 >   archive; nothing here proves a `.glsl` file compiles and composites, which needs a
 >   Metal device and a live surface.
 
+Note that `Package.swift` on this branch pins a **macOS-only** shader-enabled
+prerelease, because that is the only platform the shader path has been exercised
+on. Building any other platform group against this pin will fail to resolve
+`libghostty`. Run `./build.sh` with no flags to get the standard all-platform,
+shader-less build that matches upstream.
+
 ## License
 
 MIT License. See [LICENSE](LICENSE) for details.
