@@ -122,9 +122,11 @@ if [ -z "$LIBRARY_PATH" ]; then
 fi
 
 # A build where the flag silently did nothing still produces a structurally
-# valid — but shader-less — XCFramework, so fail loudly instead.
+# valid — but shader-less — XCFramework, so fail loudly instead. Count rather
+# than `grep -q`: quitting early closes the pipe, and under `pipefail` nm's
+# resulting SIGPIPE would read as "symbol not found" on a large archive.
 if [ "$CUSTOM_SHADERS" = true ] &&
-    ! nm -g "$LIBRARY_PATH" 2>/dev/null | grep -q "T _glslang_initialize_process"; then
+    [ "$(nm -g "$LIBRARY_PATH" 2>/dev/null | grep -c "T _glslang_initialize_process")" -eq 0 ]; then
     echo "[!] custom shaders requested but glslang is absent from $LIBRARY_PATH"
     exit 1
 fi
