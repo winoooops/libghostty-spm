@@ -19,6 +19,8 @@ Options:
   --platforms <csv>        Build platform groups. Default:
                            macos,ios,maccatalyst
   --download-url <url>     Generate Package.swift from Package.swift.template.
+  --custom-shaders         Build with GLSL shader support (glslang/spirv-cross).
+                           Off by default; see "Custom shaders" in README.md.
   --skip-tests             Skip local xcodebuild and swift test verification.
   -h, --help               Show this help.
 
@@ -36,6 +38,7 @@ ROOT_DIR=$(pwd)
 SOURCE_DIR="$ROOT_DIR/References/ghostty-upstream"
 PLATFORMS="macos,ios,maccatalyst"
 DOWNLOAD_URL=${DOWNLOAD_URL:-}
+CUSTOM_SHADERS=${GHOSTTY_CUSTOM_SHADERS:-false}
 GHOSTTY_REF=
 SKIP_TESTS=0
 
@@ -56,6 +59,10 @@ while [ $# -gt 0 ]; do
         --download-url)
             DOWNLOAD_URL="$2"
             shift 2
+            ;;
+        --custom-shaders)
+            CUSTOM_SHADERS=true
+            shift
             ;;
         --skip-tests)
             SKIP_TESTS=1
@@ -97,9 +104,12 @@ XCFRAMEWORK_ZIP="$ROOT_DIR/build/GhosttyKit.xcframework.zip"
 rm -rf "$ARTIFACTS_DIR" "$XCFRAMEWORK_PATH" "$XCFRAMEWORK_ZIP"
 mkdir -p "$ARTIFACTS_DIR" "$(dirname "$XCFRAMEWORK_PATH")"
 
+export GHOSTTY_CUSTOM_SHADERS="$CUSTOM_SHADERS"
+
 echo "[*] zig version: $(zig version)"
 echo "[*] ghostty source: $SOURCE_DIR"
 echo "[*] platform groups: $PLATFORMS"
+echo "[*] custom shaders: $CUSTOM_SHADERS"
 
 OLD_IFS=$IFS
 IFS=','
