@@ -151,7 +151,7 @@ The bundled `libghostty` is a trimmed build optimized for sandboxed, embedded us
 | Configuration system             | Yes              | Yes              | All terminal config options — retained                                                                                                                |
 | Input handling (key, mouse, IME) | Yes              | Yes              | Full keyboard/mouse/touch/IME pipeline — retained                                                                                                     |
 | Text selection & clipboard       | Yes              | Yes              | Selection, copy/paste APIs — retained                                                                                                                 |
-| Custom shaders (GLSL)            | Yes              | **No**           | `glslang` and `spirv-cross` removed (`-Dcustom-shaders=false`). Shadertoy/post-processing shaders are a desktop feature unnecessary for embedded use. |
+| Custom shaders (GLSL)            | Yes              | **No**           | `glslang` and `spirv-cross` removed (`-Dcustom-shaders=false`). Opt in with `./build.sh --custom-shaders` — see the caution below.                    |
 | Terminal inspector (ImGui)       | Yes              | **No**           | `dcimgui` removed (`-Dinspector=false`). Debug inspector UI replaced with no-op stubs.                                                                |
 | Sentry crash reporting           | Yes              | **No**           | Disabled (`-Dsentry=false`).                                                                                                                          |
 | Native app runtime               | Yes              | **No**           | Cocoa/GTK/Wayland app shell disabled (`-Dapp-runtime=none`). The host app provides its own runtime.                                                   |
@@ -161,6 +161,26 @@ The bundled `libghostty` is a trimmed build optimized for sandboxed, embedded us
 | Host-managed I/O backend         | No               | **Added**        | New `GHOSTTY_SURFACE_IO_BACKEND_HOST_MANAGED` for non-PTY, sandbox-safe terminal I/O.                                                                 |
 | iOS Metal rendering fixes        | No               | **Added**        | IOSurface +1px tolerance, synchronous present, 64-byte row alignment for iOS.                                                                         |
 | iOS platform fixes               | No               | **Added**        | Deployment target lowered, private API removed, kqueue fix for simulator.                                                                             |
+
+### Opting into custom shaders
+
+```bash
+./build.sh --custom-shaders          # or: GHOSTTY_CUSTOM_SHADERS=true ./build.sh
+```
+
+> [!CAUTION]
+> Off by default, and it should stay off unless you need Shadertoy-style
+> post-processing. Enabling it:
+>
+> - **Grows the static archive ~6.7×** — 19 MB → 129 MB per architecture, and the
+>   release zip by roughly the same absolute amount. Consumers dead-strip what they
+>   don't call, but the artifact, CI download, and every checkout pay in full.
+> - **Adds redistribution obligations.** glslang carries several permissive licenses
+>   requiring notices in binary distributions; SPIRV-Cross is Apache-2.0 and requires
+>   its license be delivered. Ship those notices with your build.
+> - **Is only smoke-tested for linkage.** The build asserts glslang is present in the
+>   archive; nothing here proves a `.glsl` file compiles and composites, which needs a
+>   Metal device and a live surface.
 
 ## License
 

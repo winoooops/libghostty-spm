@@ -15,6 +15,7 @@ ZIG_TARGET=${2:-}
 OUTPUT_DIR=${3:-}
 ZIG_CPU=${ZIG_CPU:-}
 ZIG_BUILD_EXTRA_ARGS=${ZIG_BUILD_EXTRA_ARGS:-}
+CUSTOM_SHADERS=${GHOSTTY_CUSTOM_SHADERS:-false}
 
 if [ -z "$SOURCE_DIR" ] || [ -z "$ZIG_TARGET" ] || [ -z "$OUTPUT_DIR" ]; then
     echo "Usage: $0 <source_dir> <zig_target> <output_dir>"
@@ -67,7 +68,7 @@ ZIG_BUILD_COMMAND=(
     -Demit-macos-app=false
     -Demit-docs=false
     -Dsentry=false
-    -Dcustom-shaders=false
+    -Dcustom-shaders="$CUSTOM_SHADERS"
     -Dinspector=false
     -Dtarget="$ZIG_TARGET"
 )
@@ -117,6 +118,14 @@ if [ -z "$LIBRARY_PATH" ]; then
         echo "[!] try again with ZIG_BUILD_EXTRA_ARGS='-Demit-xcframework=true' if you want to force Darwin libghostty build graph execution"
     fi
     find "$LOCAL_CACHE_DIR" -maxdepth 3 -type f | sort | tail -n 50
+    exit 1
+fi
+
+# A build where the flag silently did nothing still produces a structurally
+# valid — but shader-less — XCFramework, so fail loudly instead.
+if [ "$CUSTOM_SHADERS" = true ] &&
+    ! nm -g "$LIBRARY_PATH" 2>/dev/null | grep -q "T _glslang_initialize_process"; then
+    echo "[!] custom shaders requested but glslang is absent from $LIBRARY_PATH"
     exit 1
 fi
 
