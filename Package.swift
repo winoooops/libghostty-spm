@@ -49,11 +49,8 @@ let package = Package(
         ),
         .binaryTarget(
             name: "libghostty",
-            // macOS-only, shader-enabled prerelease — see "Opting into custom
-            // shaders" in README.md. Built from the same ghostty ref as
-            // upstream storage.1.3.2, with -Dcustom-shaders=true.
-            url: "https://github.com/winoooops/libghostty-spm-shaders/releases/download/vimeflow-custom-shaders-4/GhosttyKit.xcframework.zip",
-            checksum: "6a2d4fea1d653c06aacce635984767837b73154dabd1b11763b6f19550b521d9"
+            url: "https://github.com/winoooops/libghostty-spm-shaders/releases/download/shaders-1.3.2-1/GhosttyKit.xcframework.zip",
+            checksum: "b5bfdfdf555e768d9ac18ad729a866298bb2bac1b2b305a771ed18ff163dd9ae"
         ),
         .testTarget(
             name: "GhosttyKitTest",
