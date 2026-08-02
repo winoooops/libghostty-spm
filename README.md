@@ -37,26 +37,30 @@ Ghostty's shader pipeline is a full GLSL → SPIR-V → Metal path, so anything 
 can write as a Shadertoy-style fragment shader can composite over the terminal.
 Cursor effects are the obvious use, and the one this fork was built for.
 
-<!-- Capture pending — see .github/assets/README.md for the shot list and the
-     ffmpeg recipe. Drop the file in, then uncomment the line below.
-![Ghostty cursor shaders running in Vimeflow](.github/assets/cursor-shaders.gif)
--->
-
 [Vimeflow](https://github.com/winoooops/vimeflow) consumes this package and
 exposes five cursor effects in its terminal settings, all from
 [`sahaj-b/ghostty-cursor-shaders`](https://github.com/sahaj-b/ghostty-cursor-shaders)
-(MIT, © Sahaj Bhatt):
+(MIT, © Sahaj Bhatt), compiled by this build and running live in a Vimeflow pane:
 
-| Effect     | Shader file             | What it does                                            |
-| ---------- | ----------------------- | ------------------------------------------------------- |
-| Warp       | `cursor_warp.glsl`      | Stretches the cursor toward its destination as it moves |
-| Sweep      | `cursor_sweep.glsl`     | Sweeps a lit band along the path the cursor travelled   |
-| Tail       | `cursor_tail.glsl`      | Trails a fading comet tail behind the cursor            |
-| Ripple     | `ripple_cursor.glsl`    | Rings out from the cursor on each move                  |
-| Sonic Boom | `sonic_boom_cursor.glsl`| Fires a shockwave when the cursor jumps                 |
+<table>
+  <tr>
+    <td width="50%" valign="top"><sub><b>Warp</b> — <code>cursor_warp.glsl</code> — stretches the cursor toward its destination as it moves</sub><img src=".github/assets/cursor-warp.gif" alt="The Warp cursor shader stretching the cursor between positions as it jumps" width="100%" /></td>
+    <td width="50%" valign="top"><sub><b>Sweep</b> — <code>cursor_sweep.glsl</code> — sweeps a lit band along the path the cursor travelled</sub><img src=".github/assets/cursor-sweep.gif" alt="The Sweep cursor shader lighting a band along the cursor's path" width="100%" /></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><sub><b>Tail</b> — <code>cursor_tail.glsl</code> — trails a fading comet tail behind the cursor</sub><img src=".github/assets/cursor-tail.gif" alt="The Tail cursor shader trailing a fading streak behind the cursor" width="100%" /></td>
+    <td width="50%" valign="top"><sub><b>Ripple</b> — <code>ripple_cursor.glsl</code> — rings out from the cursor on each move</sub><img src=".github/assets/cursor-ripple.gif" alt="The Ripple cursor shader ringing outward from each cursor position" width="100%" /></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><sub><b>Sonic Boom</b> — <code>sonic_boom_cursor.glsl</code> — fires a shockwave when the cursor jumps</sub><img src=".github/assets/cursor-sonic-boom.gif" alt="The Sonic Boom cursor shader firing a shockwave on a long cursor jump" width="100%" /></td>
+    <td width="50%" valign="top"></td>
+  </tr>
+</table>
 
-Those files are not vendored here — this package ships the *compiler*, not a
-shader library. Take them from the upstream repo, or write your own.
+Those files are not vendored here — this package ships the _compiler_, not a
+shader library. Take them from
+[`sahaj-b/ghostty-cursor-shaders`](https://github.com/sahaj-b/ghostty-cursor-shaders),
+or write your own.
 
 ### Using a shader
 
