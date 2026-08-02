@@ -1,14 +1,42 @@
-# GhosttyKit
+# libghostty-spm-shaders
 
-Swift Package wrapping [Ghostty](https://ghostty.org)'s terminal emulator library for Apple platforms.
+A downstream distribution of [`Lakr233/libghostty-spm`](https://github.com/Lakr233/libghostty-spm)
+that keeps Ghostty's **GLSL custom shader compiler** in the binary.
 
-> Pre-built `libghostty` static library distributed as an XCFramework binary target.
+## Why this fork exists
+
+Upstream `libghostty-spm` is built for embedded, sandboxed use, so it compiles
+out `glslang` and `spirv-cross` (`-Dcustom-shaders=false`). That is the right
+default for upstream — the shader compiler adds ~110 MB per architecture to a
+package most consumers use headlessly.
+
+Vimeflow's native cursor effects need it, and Swift Package Manager gives a
+package exactly **one** `binaryTarget` URL per revision: there is no way for a
+consumer to ask upstream's published artifact for a shader-enabled variant. So
+the shader build has to be published by someone. That is all this repo does.
+
+Everything else tracks upstream. We carry no behavioral patches — if you find a
+terminal bug here, it is upstream's, and it should be fixed there.
+
+## What is different from upstream
+
+| | Upstream | Here |
+| --- | --- | --- |
+| Custom shaders (GLSL) | Off | **On by default** |
+| Published platforms | macOS, iOS, iOS-simulator, Mac Catalyst | **macOS only** |
+| Static archive, per arch | ~19 MB | ~129 MB |
+| Third-party notices | — | [`ThirdPartyLicenses/`](ThirdPartyLicenses/) |
+
+Only macOS is published because that is the only platform the shader path has
+been exercised on. `./build.sh --platforms ios` still works if you want to
+verify it yourself, but no release carries those variants.
 
 ## Platforms
 
 - macOS 13+
-- iOS 15+
-- Mac Catalyst 15+
+
+The package manifest still declares iOS and Mac Catalyst, inherited from
+upstream, but the published binary does not contain those slices.
 
 ## Products
 
@@ -19,26 +47,64 @@ Swift Package wrapping [Ghostty](https://ghostty.org)'s terminal emulator librar
 | `GhosttyTheme`    | 485 terminal color themes from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) (MIT License) |
 | `ShellCraftKit`   | Sandboxed shell emulation framework (depends on GhosttyTerminal)                |
 
-## Installation
+## Consuming it
 
-Add to your `Package.swift`:
+Pin an exact revision — this package publishes a moving `main`, not semantic
+versions, so `from:` would be misleading:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Lakr233/libghostty-spm.git", from: "1.2.0"),
+    .package(
+        url: "https://github.com/winoooops/libghostty-spm-shaders.git",
+        revision: "<commit sha of a released main>"
+    ),
 ]
 ```
 
-Then add the product you need:
+Then add the product you need. Product and module names are unchanged from
+upstream, so switching between the two is a one-line edit:
 
 ```swift
 .target(
     name: "YourTarget",
     dependencies: [
-        .product(name: "GhosttyTerminal", package: "libghostty-spm"),
+        .product(name: "GhosttyTerminal", package: "libghostty-spm-shaders"),
     ]
 )
 ```
+
+### Verifying you actually got the shader build
+
+Cheapest possible check — the shader compiler's entry point must be a defined
+symbol in the resolved artifact:
+
+```bash
+nm -gU <DerivedData-or-scratch>/artifacts/libghostty-spm-shaders/libghostty/\
+GhosttyKit.xcframework/macos-*/libghostty.a | grep _glslang_initialize_process
+```
+
+No output means you resolved a shader-less artifact. Resolve the slice
+directory by prefix rather than hardcoding it: a universal build is named
+`macos-arm64_x86_64`, an arm64-only build `macos-arm64`. Note also that a
+universal symbol table is ~2 MB, which overflows some default subprocess
+buffers (node's `execFileSync` caps at 1 MB and fails with a bare `ENOBUFS`).
+
+## Building it yourself
+
+```bash
+./build.sh                        # macOS, shaders on — what releases ship
+./build.sh --no-custom-shaders    # upstream-equivalent trim
+./build.sh --platforms ios        # unverified here, but it builds
+```
+
+The build fails loudly if shaders were requested but `glslang` is absent from
+the archive, because a build where the flag quietly did nothing still produces
+a structurally valid — and completely shader-less — XCFramework.
+
+Shipping a binary built from this package means shipping glslang and
+SPIRV-Cross with it. Their notices are vendored in
+[`ThirdPartyLicenses/`](ThirdPartyLicenses/), taken from the exact tarballs
+Ghostty pins; re-copy them whenever `Ghostty.ref` moves.
 
 ## Usage
 
@@ -128,16 +194,17 @@ This applies patches from `Patches/ghostty/`, builds for all target architecture
 
 ## Release Versioning
 
-Bare semantic-version tags such as `1.3.1` are GhosttyKit Swift package
-versions. They are independent from Ghostty's upstream tags. The matching
-`storage.1.3.1` release stores the XCFramework consumed by that package tag.
+Releases are tagged `shaders-<upstream-version>-<build>` — for example
+`shaders-1.3.2-1` is our first shader build tracking upstream's `1.3.2`. The
+scheme deliberately avoids upstream's `X.Y.Z` and `storage.X.Y.Z` namespaces so
+that syncing upstream tags never collides with ours.
+
+Consumers pin a **commit sha**, not a tag: the tag names the artifact, the sha
+names the manifest that points at it.
 
 Release builds use the immutable upstream Ghostty commit recorded in
-`Ghostty.ref`. Updating Ghostty requires a reviewed change to that file, so a
-package release cannot silently switch to a different upstream tag or commit.
-Manual releases require an explicit package version; scheduled releases only
-increment the package patch version when `main` is newer than the latest
-package tag.
+`Ghostty.ref`. Updating Ghostty requires a change to that file, so a release
+cannot silently switch to a different upstream commit.
 
 ## Trimmed Build
 
@@ -151,7 +218,7 @@ The bundled `libghostty` is a trimmed build optimized for sandboxed, embedded us
 | Configuration system             | Yes              | Yes              | All terminal config options — retained                                                                                                                |
 | Input handling (key, mouse, IME) | Yes              | Yes              | Full keyboard/mouse/touch/IME pipeline — retained                                                                                                     |
 | Text selection & clipboard       | Yes              | Yes              | Selection, copy/paste APIs — retained                                                                                                                 |
-| Custom shaders (GLSL)            | Yes              | **No**           | `glslang` and `spirv-cross` removed (`-Dcustom-shaders=false`). Opt in with `./build.sh --custom-shaders` — see the caution below.                    |
+| Custom shaders (GLSL)            | Yes              | Yes              | **Restored by this fork** (`-Dcustom-shaders=true`). Upstream removes `glslang` and `spirv-cross`; opt back out with `--no-custom-shaders`.           |
 | Terminal inspector (ImGui)       | Yes              | **No**           | `dcimgui` removed (`-Dinspector=false`). Debug inspector UI replaced with no-op stubs.                                                                |
 | Sentry crash reporting           | Yes              | **No**           | Disabled (`-Dsentry=false`).                                                                                                                          |
 | Native app runtime               | Yes              | **No**           | Cocoa/GTK/Wayland app shell disabled (`-Dapp-runtime=none`). The host app provides its own runtime.                                                   |
@@ -162,37 +229,36 @@ The bundled `libghostty` is a trimmed build optimized for sandboxed, embedded us
 | iOS Metal rendering fixes        | No               | **Added**        | IOSurface +1px tolerance, synchronous present, 64-byte row alignment for iOS.                                                                         |
 | iOS platform fixes               | No               | **Added**        | Deployment target lowered, private API removed, kqueue fix for simulator.                                                                             |
 
-### Opting into custom shaders
-
-```bash
-./build.sh --custom-shaders          # or: GHOSTTY_CUSTOM_SHADERS=true ./build.sh
-```
+### What keeping the shaders costs
 
 > [!CAUTION]
-> Off by default, and it should stay off unless you need Shadertoy-style
-> post-processing. Enabling it:
+> This is the trade this fork exists to make. Know what you are taking on:
 >
-> - **Grows the static archive ~6.7×** — 19 MB → 129 MB per architecture, and the
->   release zip by roughly the same absolute amount. Consumers dead-strip what they
->   don't call, but the artifact, CI download, and every checkout pay in full.
-> - **Adds redistribution obligations.** glslang carries several permissive licenses
->   requiring notices in binary distributions; SPIRV-Cross is Apache-2.0 and requires
->   its license be delivered. Ship those notices with your build.
-> - **Is only smoke-tested for linkage.** The build asserts glslang is present in the
->   archive; nothing here proves a `.glsl` file compiles and composites, which needs a
->   Metal device and a live surface.
-
-Note that `Package.swift` on this branch pins a **macOS-only** shader-enabled
-prerelease, because that is the only platform the shader path has been exercised
-on. Building any other platform group against this pin will fail to resolve
-`libghostty`. Run `./build.sh` with no flags to get the standard all-platform,
-shader-less build that matches upstream.
+> - **The static archive grows ~6.7×** — 19 MB → 129 MB per architecture. The final
+>   app link dead-strips what it never calls, so a shipped app grows far less, but
+>   the artifact, every CI download, and every developer's checkout pay in full.
+> - **You inherit redistribution obligations.** glslang carries several permissive
+>   licenses requiring notices in binary distributions; SPIRV-Cross is Apache-2.0
+>   and requires its license be delivered. See [`ThirdPartyLicenses/`](ThirdPartyLicenses/).
+> - **Only linkage is verified.** The build asserts glslang is present and exported;
+>   nothing here proves a `.glsl` file compiles and composites, which needs a Metal
+>   device and a live surface. Cover that in your app's own tests.
+>
+> If you do not need shaders, use [upstream](https://github.com/Lakr233/libghostty-spm)
+> instead of this fork with `--no-custom-shaders`.
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+MIT License. See [LICENSE](LICENSE) for details. This fork inherits upstream
+[`Lakr233/libghostty-spm`](https://github.com/Lakr233/libghostty-spm)'s license
+and authorship; the packaging work here is theirs, not ours.
 
 The bundled `libghostty` binary is built from [Ghostty](https://ghostty.org), which has its own license terms.
+
+Because this fork keeps the shader compiler, the binary additionally links
+**glslang** and **SPIRV-Cross**. Their notices are vendored in
+[`ThirdPartyLicenses/`](ThirdPartyLicenses/) and must travel with any binary you
+redistribute.
 
 ## Sponsor
 

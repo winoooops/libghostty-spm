@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "GhosttyKit",
+    name: "libghostty-spm-shaders",
     platforms: [
         .iOS(.v15),
         .macOS(.v13),
