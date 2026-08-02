@@ -35,12 +35,9 @@ test_build() {
     fi
 }
 
+# macOS only: this fork publishes a macOS-only XCFramework, so the iOS,
+# iOS-simulator and Mac Catalyst schemes have no slice to link against.
 test_build "GhosttyKit" "generic/platform=macOS"
-test_build "GhosttyKit" "generic/platform=iOS"
-test_build "GhosttyKit" "generic/platform=iOS Simulator"
 test_build "GhosttyTerminal" "generic/platform=macOS"
-test_build "GhosttyTerminal" "generic/platform=macOS,variant=Mac Catalyst"
-test_build "GhosttyTerminal" "generic/platform=iOS"
-test_build "GhosttyTerminal" "generic/platform=iOS Simulator"
 
 echo "[*] all tests passed"

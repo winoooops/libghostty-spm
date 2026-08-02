@@ -1,0 +1,106 @@
+name: Sync Upstream
+
+# Rebases this fork's shader commits onto Lakr233/libghostty-spm main, proves
+# the result still builds a shader-enabled archive, and only then moves main.
+# A failed verification leaves main untouched and the run red — the fork keeps
+# serving the last artifact that worked.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Sunday 07:11 UTC — ahead of the Monday 06:23 release build, so a sync
+    # that lands has a verified main to publish from.
+    - cron: "11 7 * * 0"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: macos-15
+    timeout-minutes: 60
+    outputs:
+      synced: ${{ steps.rebase.outputs.synced }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rebase onto upstream
+        id: rebase
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git remote add upstream https://github.com/Lakr233/libghostty-spm.git
+          # Tags only: upstream's X.Y.Z / storage.X.Y.Z names are theirs, and
+          # fetching them into our namespace makes `git describe` lie.
+          git fetch --no-tags upstream main
+
+          BASE=$(git merge-base HEAD upstream/main)
+          if [ "$BASE" = "$(git rev-parse upstream/main)" ]; then
+            echo "[*] already on top of upstream/main, nothing to sync"
+            echo "synced=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "[*] rebasing $(git rev-list --count upstream/main..HEAD) commit(s) onto upstream/main"
+          if ! git rebase upstream/main; then
+            git rebase --abort
+            echo "[!] rebase conflicts with upstream — resolve by hand"
+            exit 1
+          fi
+
+          # The upstream package version we now track, for the release tag.
+          UPSTREAM_VERSION=$(git -c 'versionsort.suffix=-' ls-remote --tags --refs --sort=-v:refname \
+            https://github.com/Lakr233/libghostty-spm.git 'refs/tags/[0-9]*.[0-9]*.[0-9]*' |
+            head -n 1 | sed 's|.*refs/tags/||')
+          if echo "$UPSTREAM_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            printf '%s\n' "$UPSTREAM_VERSION" > Upstream.version
+            git add Upstream.version
+            git diff --cached --quiet || git commit -m "chore: track upstream $UPSTREAM_VERSION"
+          fi
+
+          echo "synced=true" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Zig
+        if: steps.rebase.outputs.synced == 'true'
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Clone Ghostty
+        if: steps.rebase.outputs.synced == 'true'
+        run: |
+          git clone https://github.com/ghostty-org/ghostty ./References/ghostty-upstream
+          git -C ./References/ghostty-upstream checkout "$(tr -d '[:space:]' < Ghostty.ref)"
+
+      # One architecture is enough to prove the rebase still produces a
+      # shader-enabled archive; build-ghostty.sh aborts if glslang is missing.
+      # The release build covers both.
+      - name: Verify the rebase still builds shaders
+        if: steps.rebase.outputs.synced == 'true'
+        run: |
+          ./Script/build-ghostty.sh \
+            "$PWD/References/ghostty-upstream" \
+            aarch64-macos \
+            "$PWD/build/out"
+        env:
+          GHOSTTY_CUSTOM_SHADERS: "true"
+
+      - name: Push main
+        if: steps.rebase.outputs.synced == 'true'
+        run: |
+          git clean -fdx
+          git push --force-with-lease origin HEAD:main
+
+  release:
+    needs: sync
+    if: needs.sync.outputs.synced == 'true'
+    uses: ./.github/workflows/build.yml

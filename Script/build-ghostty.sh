@@ -15,7 +15,7 @@ ZIG_TARGET=${2:-}
 OUTPUT_DIR=${3:-}
 ZIG_CPU=${ZIG_CPU:-}
 ZIG_BUILD_EXTRA_ARGS=${ZIG_BUILD_EXTRA_ARGS:-}
-CUSTOM_SHADERS=${GHOSTTY_CUSTOM_SHADERS:-false}
+CUSTOM_SHADERS=${GHOSTTY_CUSTOM_SHADERS:-true}
 
 if [ -z "$SOURCE_DIR" ] || [ -z "$ZIG_TARGET" ] || [ -z "$OUTPUT_DIR" ]; then
     echo "Usage: $0 <source_dir> <zig_target> <output_dir>"
