@@ -91,10 +91,10 @@ test_build() {
 
 (
     cd "$WORK_DIR/Consumer"
+    # macOS only, matching the slices this fork publishes. The other
+    # destinations have no library to link and fail with "no library for this
+    # platform was found".
     test_build "generic/platform=macOS"
-    test_build "generic/platform=macOS,variant=Mac Catalyst"
-    test_build "generic/platform=iOS"
-    test_build "generic/platform=iOS Simulator"
 )
 
 echo "[*] xcframework consumer tests passed"
