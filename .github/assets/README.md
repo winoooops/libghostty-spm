@@ -4,31 +4,43 @@ Kept here rather than under `docs/` on purpose: `pages.yml` triggers on
 `docs/**`, and GitHub Pages is not enabled on this repo, so a README image
 living there would turn every docs change into a failed workflow run.
 
-## `cursor-shaders.gif` — pending capture
+## `cursor-*.gif`
 
-The README's showcase image is commented out until this file exists. Once it is
-here, uncomment the `![...]` line in the top-level README.
+One loop per shader — `warp`, `sweep`, `tail`, `ripple`, `sonic-boom` — shown in
+a two-column grid under "What this unlocks downstream". Captured in a
+[Vimeflow](https://github.com/winoooops/vimeflow) terminal pane running a build
+of this package, with the shaders from
+[`sahaj-b/ghostty-cursor-shaders`](https://github.com/sahaj-b/ghostty-cursor-shaders).
 
-What it should show, in one loop of roughly 8–12 seconds: a terminal pane with a
-visible cursor, cycling through the effects so the difference between them is
-legible. Move the cursor deliberately — these shaders react to movement, and a
-capture of a mostly-idle cursor shows nothing.
+**440px wide, ~1.8 MB for all five.** This repo is an SPM dependency, so every
+consumer clones these bytes on `swift package resolve` — keep the total in the
+low megabytes. 440 is the width the grid renders them at, so there is nothing to
+gain from shipping larger files.
 
-Suggested shot list:
+## Recapturing
 
-1. `tail` — hold a line of text, move left/right across it a few times.
-2. `ripple` — a few single-cell moves with pauses between, so each ring completes.
-3. `sonic-boom` — a large jump (end of line → start of line) to trigger the shockwave.
-4. `warp` — continuous movement, so the stretch stays visible.
+These shaders react to _movement_; a capture of a mostly-idle cursor shows
+nothing. Use the same choreography for every effect so the grid stays
+comparable — the only variable should be the shader:
 
-Capture with any screen recorder, then convert. This produces a reasonably small
-looping GIF at a readable frame rate:
+1. Type a line of text at a steady pace.
+2. Jump to the start of the line, hold, then jump to the end and hold. This is
+   what makes `warp` and `sonic-boom` visible.
+3. Hold an arrow key for a continuous run. This is what makes `tail` and `sweep`
+   visible.
+4. A few single-cell moves with pauses, so each `ripple` ring completes.
+
+Then trim and convert. `gifski` quantizes per frame, which matters here — these
+are smooth additive gradients, and a single global palette bands them visibly:
 
 ```bash
-ffmpeg -i capture.mov \
-  -vf "fps=20,scale=900:-1:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse" \
-  -loop 0 .github/assets/cursor-shaders.gif
-```
+FRAMES=$(mktemp -d)
 
-Keep it under a few MB — GitHub serves README images inline and a large GIF
-makes the page crawl. If it lands too big, drop `fps` to 15 or `scale` to 720.
+# Trim in ffmpeg — gifski has no seek. For the middle N seconds of a clip,
+# start at (duration - N) / 2.
+ffmpeg -v error -ss <start> -t 3 -i capture.mov \
+  -vf "scale=440:-2:flags=lanczos" -r 20 "$FRAMES/%04d.png"
+
+gifski --fps 20 --quality 90 -o .github/assets/cursor-<effect>.gif "$FRAMES"/*.png
+rm -rf "$FRAMES"
+```
