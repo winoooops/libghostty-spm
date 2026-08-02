@@ -3,6 +3,17 @@
 A downstream distribution of [`Lakr233/libghostty-spm`](https://github.com/Lakr233/libghostty-spm)
 that keeps Ghostty's **GLSL custom shader compiler** in the binary.
 
+> [!IMPORTANT]
+> **macOS only, and only worth using if you want custom shaders.**
+>
+> This repo exists for exactly one reason: to publish a macOS `libghostty`
+> binary with the GLSL shader compiler compiled in. It is not a general-purpose
+> distribution and it is not a better upstream.
+>
+> For iOS, iOS Simulator, Mac Catalyst, or a macOS build without shaders, use
+> [`Lakr233/libghostty-spm`](https://github.com/Lakr233/libghostty-spm)
+> directly — it publishes all of those, and everything here tracks it anyway.
+
 ## Why this fork exists
 
 Upstream `libghostty-spm` is built for embedded, sandboxed use, so it compiles
@@ -27,9 +38,9 @@ terminal bug here, it is upstream's, and it should be fixed there.
 | Static archive, per arch | ~19 MB | ~129 MB |
 | Third-party notices | — | [`ThirdPartyLicenses/`](ThirdPartyLicenses/) |
 
-Only macOS is published because that is the only platform the shader path has
-been exercised on. `./build.sh --platforms ios` still works if you want to
-verify it yourself, but no release carries those variants.
+Only macOS is published, because that is the only platform the shader path has
+been exercised on. If you need any other Apple platform, take it from
+[upstream](https://github.com/Lakr233/libghostty-spm) — that is what it is for.
 
 ## What this unlocks downstream
 
@@ -99,17 +110,18 @@ reads a path, not a string of source.
 
 ## Platforms
 
-- macOS 13+
-
-The package manifest still declares iOS and Mac Catalyst, inherited from
-upstream, but the published binary does not contain those slices.
+**macOS 13+, and nothing else.** The manifest still declares iOS and Mac
+Catalyst because it is inherited from upstream, but the published binary
+carries no slices for them — resolving this package on those platforms gets you
+a link error, not a working build. Use
+[upstream](https://github.com/Lakr233/libghostty-spm) there.
 
 ## Products
 
-| Library           | Description                                                                     |
-| ----------------- | ------------------------------------------------------------------------------- |
-| `GhosttyKit`      | Re-exports the libghostty C API (`ghostty.h`)                                   |
-| `GhosttyTerminal` | Swift wrapper — native views, SwiftUI integration, input handling, display link |
+| Library           | Description                                                            |
+| ----------------- | ---------------------------------------------------------------------- |
+| `GhosttyKit`      | Re-exports the libghostty C API (`ghostty.h`)                          |
+| `GhosttyTerminal` | Swift wrapper — native AppKit views, input handling, display link      |
 | `GhosttyTheme`    | 485 terminal color themes from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) (MIT License) |
 | `ShellCraftKit`   | Sandboxed shell emulation framework (depends on GhosttyTerminal)                |
 
@@ -160,7 +172,6 @@ buffers (node's `execFileSync` caps at 1 MB and fails with a bare `ENOBUFS`).
 ```bash
 ./build.sh                        # macOS, shaders on — what releases ship
 ./build.sh --no-custom-shaders    # upstream-equivalent trim
-./build.sh --platforms ios        # unverified here, but it builds
 ```
 
 The build fails loudly if shaders were requested but `glslang` is absent from
@@ -177,9 +188,8 @@ Ghostty pins; re-copy them whenever `Ghostty.ref` moves.
 The example apps are the best starting point for real integration:
 
 - `Example/GhosttyTerminalApp/` — macOS AppKit demo with delegate callbacks
-- `Example/MobileGhosttyApp/` — iOS UIKit demo with keyboard, safe area, themes, and text selection
 
-### SwiftUI (iOS 15+ / macOS 13+ / Mac Catalyst 15+)
+### SwiftUI (macOS 13+)
 
 ```swift
 import SwiftUI
@@ -208,7 +218,7 @@ struct ContentView: View {
 }
 ```
 
-### UIKit / AppKit
+### AppKit
 
 ```swift
 import GhosttyTerminal
@@ -221,7 +231,7 @@ terminalView.configuration = TerminalSurfaceOptions(
 )
 ```
 
-`TerminalView` is a type alias that resolves to `UITerminalView` (iOS/Catalyst) or `AppTerminalView` (macOS).
+`TerminalView` is a type alias; on macOS it resolves to `AppTerminalView`.
 
 ### Prompt and scrollback navigation
 
@@ -242,7 +252,7 @@ through `performBindingAction(_:)`.
 ## Notes
 
 - `TerminalViewState` is the SwiftUI state container.
-- `TerminalView` is the UIKit/AppKit view typealias.
+- `TerminalView` is the AppKit view typealias.
 - `TerminalController` owns app lifecycle, config resolution, themes, and surface creation.
 - `InMemoryTerminalSession` provides the host-managed backend used by the sandboxed example apps.
 - `GhosttyThemeCatalog` exposes bundled iTerm2 color schemes.
@@ -292,8 +302,6 @@ The bundled `libghostty` is a trimmed build optimized for sandboxed, embedded us
 | Documentation generation         | Yes              | **No**           | Skipped (`-Demit-docs=false`).                                                                                                                        |
 | Frame data generator             | Build-time tool  | **Pre-compiled** | `framedata.compressed` shipped pre-built; framegen C tool dependency removed.                                                                         |
 | Host-managed I/O backend         | No               | **Added**        | New `GHOSTTY_SURFACE_IO_BACKEND_HOST_MANAGED` for non-PTY, sandbox-safe terminal I/O.                                                                 |
-| iOS Metal rendering fixes        | No               | **Added**        | IOSurface +1px tolerance, synchronous present, 64-byte row alignment for iOS.                                                                         |
-| iOS platform fixes               | No               | **Added**        | Deployment target lowered, private API removed, kqueue fix for simulator.                                                                             |
 
 ### What keeping the shaders costs
 
