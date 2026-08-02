@@ -31,6 +31,68 @@ Only macOS is published because that is the only platform the shader path has
 been exercised on. `./build.sh --platforms ios` still works if you want to
 verify it yourself, but no release carries those variants.
 
+## What this unlocks downstream
+
+Ghostty's shader pipeline is a full GLSL → SPIR-V → Metal path, so anything you
+can write as a Shadertoy-style fragment shader can composite over the terminal.
+Cursor effects are the obvious use, and the one this fork was built for.
+
+<!-- Capture pending — see .github/assets/README.md for the shot list and the
+     ffmpeg recipe. Drop the file in, then uncomment the line below.
+![Ghostty cursor shaders running in Vimeflow](.github/assets/cursor-shaders.gif)
+-->
+
+[Vimeflow](https://github.com/winoooops/vimeflow) consumes this package and
+exposes five cursor effects in its terminal settings, all from
+[`sahaj-b/ghostty-cursor-shaders`](https://github.com/sahaj-b/ghostty-cursor-shaders)
+(MIT, © Sahaj Bhatt):
+
+| Effect     | Shader file             | What it does                                            |
+| ---------- | ----------------------- | ------------------------------------------------------- |
+| Warp       | `cursor_warp.glsl`      | Stretches the cursor toward its destination as it moves |
+| Sweep      | `cursor_sweep.glsl`     | Sweeps a lit band along the path the cursor travelled   |
+| Tail       | `cursor_tail.glsl`      | Trails a fading comet tail behind the cursor            |
+| Ripple     | `ripple_cursor.glsl`    | Rings out from the cursor on each move                  |
+| Sonic Boom | `sonic_boom_cursor.glsl`| Fires a shockwave when the cursor jumps                 |
+
+Those files are not vendored here — this package ships the *compiler*, not a
+shader library. Take them from the upstream repo, or write your own.
+
+### Using a shader
+
+`custom-shader` is a stock Ghostty config key, so it goes through
+`TerminalConfiguration.custom(_:_:)`. Point it at an absolute path to a `.glsl`
+file and rebuild the surface's configuration:
+
+```swift
+import GhosttyTerminal
+
+let shader = Bundle.main.url(
+    forResource: "cursor_tail",
+    withExtension: "glsl"
+)!
+
+let configuration = TerminalConfiguration()
+    .background("#1e1e2e")
+    .foreground("#cdd6f4")
+    .custom("custom-shader", shader.path)
+```
+
+Swapping effects at runtime is the same call with a different path; passing no
+`custom-shader` key at all turns the effect off. Ghostty compiles the shader
+when the configuration is applied, so a syntax error surfaces as a failed
+configuration rather than a crash — check the result and fall back rather than
+assuming success.
+
+Bundle the `.glsl` files as resources so they exist on disk at runtime; Ghostty
+reads a path, not a string of source.
+
+> [!NOTE]
+> Effects tuned for a desktop Ghostty window often need retuning for a terminal
+> embedded in an app — Vimeflow adjusts these five for one-cell cursor moves and
+> shorter fade times, and drives `ripple` and `sonic-boom` from cursor movement
+> rather than only from cursor-shape changes.
+
 ## Platforms
 
 - macOS 13+
