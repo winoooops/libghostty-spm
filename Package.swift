@@ -45,8 +45,8 @@ let package = Package(
         ),
         .binaryTarget(
             name: "libghostty",
-            url: "https://github.com/winoooops/libghostty-spm-shaders/releases/download/shaders-1.3.2-1/GhosttyKit.xcframework.zip",
-            checksum: "b5bfdfdf555e768d9ac18ad729a866298bb2bac1b2b305a771ed18ff163dd9ae"
+            url: "https://github.com/winoooops/libghostty-spm-shaders/releases/download/shaders-1.3.2-2/GhosttyKit.xcframework.zip",
+            checksum: "2ca72bae1e718326690fcae83f6dc694620501fe199f2c642a30acf3762b9d0b"
         ),
         .testTarget(
             name: "GhosttyKitTest",
